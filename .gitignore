@@ -12,8 +12,8 @@ build/
 .env
 *.env
 
-# uv
-uv.lock
+# uv — lockfile is committed intentionally (reproducible CI installs)
+# uv.lock
 
 # Node / Obsidian plugin
 node_modules/
