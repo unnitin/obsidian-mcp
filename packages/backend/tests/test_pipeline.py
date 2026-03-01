@@ -41,11 +41,11 @@ class TestIndexFileBranches:
         store.close()
 
     def test_unsupported_extension_returns_unsupported(self, tmp_path: Path) -> None:
-        """Covers line 51: non-.md extension."""
+        """Covers the unsupported-extension branch (e.g. .docx)."""
         pipeline, store = _make_pipeline(tmp_path)
-        pdf = tmp_path / "document.pdf"
-        pdf.write_bytes(b"%PDF-1.4 fake")
-        result = pipeline.index_file(pdf)
+        docx = tmp_path / "document.docx"
+        docx.write_bytes(b"PK fake docx")
+        result = pipeline.index_file(docx)
         assert result.status == "unsupported"
         assert result.chunks_added == 0
         store.close()

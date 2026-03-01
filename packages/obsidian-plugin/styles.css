@@ -1,0 +1,46 @@
+/* Semantic Search plugin styles */
+
+.semantic-search-modal {
+  width: 600px;
+}
+
+.semantic-search-result {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+}
+
+.semantic-search-result-title {
+  font-weight: 600;
+  font-size: 0.95em;
+}
+
+.semantic-search-result-breadcrumb {
+  font-size: 0.8em;
+  color: var(--text-muted);
+}
+
+.semantic-search-result-excerpt {
+  font-size: 0.82em;
+  color: var(--text-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.semantic-search-result-score {
+  font-size: 0.75em;
+  color: var(--text-accent);
+  font-variant-numeric: tabular-nums;
+}
+
+.semantic-search-result-badge {
+  display: inline-block;
+  font-size: 0.7em;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--background-modifier-border);
+  color: var(--text-muted);
+  margin-left: 4px;
+}
