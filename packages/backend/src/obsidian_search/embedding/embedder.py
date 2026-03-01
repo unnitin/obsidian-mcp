@@ -42,4 +42,4 @@ class Embedder:
         return self.encode(prefixed)
 
     def encode_query(self, query: str) -> np.ndarray:
-        return self.encode([self.QUERY_PREFIX + query])[0]
+        return np.asarray(self.encode([self.QUERY_PREFIX + query])[0], dtype=np.float32)
