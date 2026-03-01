@@ -10,6 +10,8 @@ Build a semantic search system for an Obsidian vault stored on iCloud. The syste
 
 This is a greenfield project in `/Users/nitinsrivastava/Documents/obsidian-mcp` (empty git repo).
 
+**User flow diagrams**: [`docs/userflows.md`](docs/userflows.md)
+
 ---
 
 ## Architecture Overview
@@ -141,9 +143,14 @@ CREATE VIRTUAL TABLE chunk_embeddings USING vec0(
 1. Strip YAML frontmatter with `python-frontmatter` (store as metadata)
 2. Parse header hierarchy with `markdown-it-py` token stream
 3. Per header section: build breadcrumb `"Title > Section > Sub"`
-4. Sections > 512 tokens: split on sentence boundaries (`nltk.sent_tokenize`) with 50-token overlap
-5. Sections < 64 tokens: merge with next sibling
-6. Each chunk text = `breadcrumb + "\n\n" + body` (gives model context)
+4. Detect special block types before size-based splitting:
+   - **Tables** (`| col |` lines): kept atomic; if >512 tokens split on row boundaries repeating header row; metadata `chunk_type=table`
+   - **Mermaid diagrams** (` ```mermaid ` fences): index DSL text as-is with surrounding paragraph context; metadata `chunk_type=mermaid`
+   - **Figure embeds** (`![[image.png]]`, `![[diagram.excalidraw]]`): index surrounding paragraph + any caption text; metadata `chunk_type=figure_context`, `figure_name=<filename>`
+   - **Callout blocks** (`> [!note]`, `> [!warning]`, etc.): kept atomic; metadata `chunk_type=callout`, `callout_type=<type>`
+5. Regular text sections >512 tokens: split on sentence boundaries (`nltk.sent_tokenize`) with 50-token overlap
+6. Sections <64 tokens: merge with next sibling
+7. Each chunk text = `breadcrumb + "\n\n" + body` (gives model context)
 
 ### PDFs
 1. `pymupdf4llm.to_markdown(path)` → structured markdown per page (preserves tables, columns, infers headings from font size)
