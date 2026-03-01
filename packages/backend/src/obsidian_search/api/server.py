@@ -57,11 +57,11 @@ def create_app(
 
     searcher = Searcher(settings=settings, store=store, embedder=embedder)
 
-    @app.get("/health")  # type: ignore[misc]
+    @app.get("/health")
     def health() -> dict[str, Any]:
         return {"status": "ok", "vault_path": str(settings.vault_path)}
 
-    @app.post("/search", response_model=SearchResponse)  # type: ignore[misc]
+    @app.post("/search", response_model=SearchResponse)
     def search(req: SearchRequest) -> SearchResponse:
         t0 = time.perf_counter()
         results = searcher.search(
@@ -73,7 +73,7 @@ def create_app(
         elapsed = (time.perf_counter() - t0) * 1000
         return SearchResponse(results=results, query_time_ms=round(elapsed, 1))
 
-    @app.get("/status", response_model=StatusResponse)  # type: ignore[misc]
+    @app.get("/status", response_model=StatusResponse)
     def status() -> StatusResponse:
         s = store.stats()
         return StatusResponse(**s)
