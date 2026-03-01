@@ -1,4 +1,4 @@
-"""Search pipeline — embed query, ANN search, normalize scores."""
+"""Search pipeline — embed query, ANN search, optional rerank, normalize scores."""
 
 from __future__ import annotations
 
@@ -16,10 +16,12 @@ class Searcher:
         settings: Settings,
         store: VectorStore,
         embedder: Embedder,
+        reranker: object | None = None,
     ) -> None:
         self.settings = settings
         self.store = store
         self.embedder = embedder
+        self._reranker = reranker
 
     def search(
         self,
@@ -34,7 +36,7 @@ class Searcher:
         # Embed query
         query_vec: np.ndarray = self.embedder.encode([query])[0]
 
-        # ANN search — fetch more candidates than needed for post-filtering
+        # ANN search — fetch more candidates than needed for post-filtering / reranking
         candidates = self.store.search(
             query_vector=query_vec,
             top_k=self.settings.rerank_candidates,
@@ -44,6 +46,13 @@ class Searcher:
 
         if not candidates:
             return []
+
+        # Optional cross-encoder reranking
+        if self._reranker is not None:
+            from obsidian_search.search.reranker import Reranker
+
+            if isinstance(self._reranker, Reranker):
+                candidates = self._reranker.rerank(query, candidates)
 
         # Convert cosine distances to similarity scores in [0, 1]
         # sqlite-vec returns L2 distance on normalised vectors; cosine distance = dist²/2
