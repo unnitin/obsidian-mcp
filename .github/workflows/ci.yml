@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main, "feature/**"]
+    branches: [main]       # post-merge verification only
   pull_request:
-    branches: [main]
+    branches: [main]       # pre-merge gate (the one that blocks bad PRs)
 
 # Cancel in-progress runs for the same branch/PR to save runner minutes.
 concurrency:
