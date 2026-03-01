@@ -5,6 +5,7 @@ description = "Semantic search backend for Obsidian vaults"
 requires-python = ">=3.12"
 dependencies = [
     "sentence-transformers>=3.0",
+    "einops>=0.8",
     "sqlite-vec>=0.1",
     "pymupdf4llm>=0.0.17",
     "trafilatura>=1.12",
