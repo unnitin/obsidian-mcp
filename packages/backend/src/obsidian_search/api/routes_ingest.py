@@ -11,9 +11,6 @@ from pydantic import BaseModel, Field
 from obsidian_search.ingestion.pipeline import IndexingPipeline
 from obsidian_search.models import IngestResult
 
-router = APIRouter()
-
-
 # ── Request schemas ───────────────────────────────────────────────────────────
 
 
@@ -35,6 +32,7 @@ class RemoveDocumentRequest(BaseModel):
 
 def create_ingest_router(pipeline: IndexingPipeline) -> APIRouter:
     """Return a router with all ingest routes bound to *pipeline*."""
+    router = APIRouter()
 
     @router.post("/ingest/url", response_model=IngestResult, status_code=status.HTTP_200_OK)
     def ingest_url(req: IngestUrlRequest) -> IngestResult:
