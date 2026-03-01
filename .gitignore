@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+.venv/
+.env
+*.env
+
+# uv
+uv.lock
+
+# Node / Obsidian plugin
+node_modules/
+packages/obsidian-plugin/main.js
+packages/obsidian-plugin/main.js.map
+
+# macOS
+.DS_Store
+.AppleDouble
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+
+# Vector DB (lives in vault, not repo)
+*.db
+*.db-shm
+*.db-wal
+
+# Model cache
+.cache/
