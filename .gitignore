@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.coverage
+coverage.xml
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+.venv/
+.env
+*.env
+
+# uv — lockfile is committed intentionally (reproducible CI installs)
+# uv.lock
+
+# Node / Obsidian plugin
+node_modules/
+packages/obsidian-plugin/main.js
+packages/obsidian-plugin/main.js.map
+
+# macOS
+.DS_Store
+.AppleDouble
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+
+# Vector DB (lives in vault, not repo)
+*.db
+*.db-shm
+*.db-wal
+
+# Model cache
+.cache/
