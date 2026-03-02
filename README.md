@@ -125,11 +125,26 @@ This creates `.venv/` and installs all Python dependencies including the embeddi
 
 ```bash
 cp .env.example .env
-# Edit .env and set:
-# VAULT_PATH=/path/to/your/obsidian/vault
+# Edit .env and set VAULT_PATH to the absolute path of your Obsidian vault
 ```
 
+**If your vault is in iCloud** (the default for Obsidian on macOS), the path contains a space. Find it with:
+
+```bash
+ls "$HOME/Library/Mobile Documents/iCloud~md~obsidian/Documents/"
+```
+
+Then set:
+
+```dotenv
+VAULT_PATH=/Users/yourname/Library/Mobile Documents/iCloud~md~obsidian/Documents/YourVaultName
+```
+
+The backend reads this folder directly from your local iCloud Drive cache — macOS keeps it in sync automatically. No special iCloud configuration is needed.
+
 ### 3. Start the backend
+
+The backend is a **local Python process** that runs on the same Mac as your vault (or a Mac mini on your local network). It is not a cloud service.
 
 ```bash
 ./scripts/start-backend.sh
@@ -137,7 +152,7 @@ cp .env.example .env
 
 This starts:
 - **FastAPI server** on `http://127.0.0.1:51234` (used by the Obsidian plugin)
-- **File watcher** monitoring your vault for changes
+- **File watcher** monitoring your vault for changes and updating the index incrementally
 
 ### 4. Install the Obsidian plugin
 
@@ -148,6 +163,120 @@ This starts:
 Then in Obsidian: **Settings → Community plugins → Enable** `Semantic Search`.
 
 Set the server URL to `http://127.0.0.1:51234` (default) and click **Test connection**.
+
+### Running on a Mac mini (always-on server)
+
+A Mac mini makes an ideal always-on host for this server. The backend process runs **on the Mac mini**, reads the vault from the Mac mini's local iCloud Drive folder (which macOS keeps in sync), and exposes the search API over your local network. Nothing leaves your home network.
+
+#### iCloud vault path
+
+Obsidian iCloud vaults are stored in a macOS-managed folder with a space in the path. Find yours:
+
+```bash
+ls "$HOME/Library/Mobile Documents/iCloud~md~obsidian/Documents/"
+```
+
+Your vault path will be:
+
+```
+/Users/yourname/Library/Mobile Documents/iCloud~md~obsidian/Documents/YourVaultName
+```
+
+Always wrap this path in double quotes in shell commands.
+
+#### Prevent the Mac mini from sleeping
+
+The server process stops if the machine sleeps. Open **System Settings → Energy → Power Adapter** and set:
+
+- **"Prevent automatic sleeping when the display is off"** → On
+- **"Wake for network access"** → On (optional, for Wake-on-LAN)
+
+Or apply the setting from the terminal:
+
+```bash
+sudo pmset -c sleep 0 disksleep 0
+```
+
+#### Auto-start with launchd
+
+Create `~/Library/LaunchAgents/com.obsidian-search.backend.plist`:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.obsidian-search.backend</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/yourname/.local/bin/uv</string>
+    <string>run</string>
+    <string>--project</string>
+    <string>/Users/yourname/obsidian-mcp/packages/backend</string>
+    <string>obsidian-search-api</string>
+  </array>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>VAULT_PATH</key>
+    <string>/Users/yourname/Library/Mobile Documents/iCloud~md~obsidian/Documents/YourVaultName</string>
+    <key>HOME</key>
+    <string>/Users/yourname</string>
+    <key>OBSIDIAN_SEARCH_HOST</key>
+    <string>0.0.0.0</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>/tmp/obsidian-search.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/obsidian-search.err</string>
+</dict>
+</plist>
+```
+
+Replace `yourname` and the vault name, then load it:
+
+```bash
+launchctl load ~/Library/LaunchAgents/com.obsidian-search.backend.plist
+```
+
+Check it started:
+
+```bash
+launchctl list | grep obsidian-search
+curl http://localhost:51234/health
+tail -f /tmp/obsidian-search.log
+```
+
+#### Access from other Macs on your network
+
+Setting `OBSIDIAN_SEARCH_HOST=0.0.0.0` (shown in the plist above) makes the server listen on all interfaces. You also need to allow the port through the macOS firewall:
+
+1. Open **System Settings → Network → Firewall → Options**
+2. Click **+**, navigate to `/Users/yourname/.venv/bin/uvicorn`, and set it to **Allow incoming connections**
+
+On your other Mac, use the Mac mini's local IP instead of `127.0.0.1`:
+
+```bash
+# Find the Mac mini's IP
+# On the Mac mini:
+ipconfig getifaddr en0
+
+# On your other Mac, set the plugin server URL to:
+# http://192.168.x.x:51234
+```
+
+Point the Obsidian plugin and Claude Desktop config to `http://192.168.x.x:51234` instead of `127.0.0.1`.
+
+---
 
 ### 5. Connect Claude Desktop (optional)
 
