@@ -1,9 +1,33 @@
 # Running and Hosting the Backend Server
 
+## How the server and iCloud fit together
+
+The backend is a **local Python process** — it runs on your Mac (or Mac mini), not in the cloud. It reads your Obsidian vault from disk, builds a local vector index, and exposes a search API on your local network.
+
+If your vault is stored in iCloud (the default for Obsidian on macOS), macOS continuously syncs it to a local folder on each of your Macs:
+
+```
+iCloud ──► /Users/yourname/Library/Mobile Documents/iCloud~md~obsidian/Documents/YourVaultName
+```
+
+The backend reads directly from that local folder — it never talks to iCloud itself. The file watcher detects changes as iCloud syncs files in, and the index updates automatically.
+
+**iCloud vault path** — the folder name contains a space, so always quote it:
+
+```bash
+VAULT_PATH="$HOME/Library/Mobile Documents/iCloud~md~obsidian/Documents/YourVaultName"
+
+# Confirm the vault name:
+ls "$HOME/Library/Mobile Documents/iCloud~md~obsidian/Documents/"
+```
+
+---
+
 ## Quick start (development)
 
 ```bash
-VAULT_PATH="/path/to/vault" bash scripts/start-backend.sh
+VAULT_PATH="/Users/yourname/Library/Mobile Documents/iCloud~md~obsidian/Documents/YourVaultName" \
+  bash scripts/start-backend.sh
 ```
 
 Server listens on `http://127.0.0.1:51234`.
@@ -39,7 +63,7 @@ Save as `~/Library/LaunchAgents/com.obsidian-search.backend.plist`:
   <key>EnvironmentVariables</key>
   <dict>
     <key>VAULT_PATH</key>
-    <string>/path/to/your/obsidian/vault</string>
+    <string>/Users/yourname/Library/Mobile Documents/iCloud~md~obsidian/Documents/YourVaultName</string>
     <key>HOME</key>
     <string>/Users/yourname</string>
   </dict>
@@ -185,8 +209,11 @@ prefix (e.g. `VAULT_PATH` works as well as `OBSIDIAN_SEARCH_VAULT_PATH`).
 
 **Example `.env` file** (place in project root or `packages/backend/`):
 ```dotenv
-VAULT_PATH=/Users/yourname/Library/Mobile Documents/iCloud~md~obsidian/Documents
+# iCloud vault (note: path contains a space — no quotes needed in .env files)
+VAULT_PATH=/Users/yourname/Library/Mobile Documents/iCloud~md~obsidian/Documents/YourVaultName
 PORT=51234
+# Set to 0.0.0.0 to allow access from other Macs on your local network
+HOST=127.0.0.1
 EXCLUDED_FOLDERS=["Templates","Archive","Attachments"]
 ```
 
