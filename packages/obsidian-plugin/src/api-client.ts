@@ -71,6 +71,10 @@ export class ApiClient {
     return this.post<IngestResult>("/ingest/url", { url, tags: tags ?? null });
   }
 
+  async ingestPdf(filePath: string): Promise<IngestResult> {
+    return this.post<IngestResult>("/ingest/pdf", { file_path: filePath });
+  }
+
   async ingestMarkdown(filePath: string): Promise<IngestResult> {
     return this.post<IngestResult>("/ingest/file", { file_path: filePath });
   }

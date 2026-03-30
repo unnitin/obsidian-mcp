@@ -44,6 +44,51 @@ export default class SemanticSearchPlugin extends Plugin {
     });
 
     this.addCommand({
+      id: "index-pdf-file",
+      name: "Index PDF file",
+      callback: async () => {
+        const files = this.app.vault.getFiles().filter((f) => f.extension === "pdf");
+        if (files.length === 0) {
+          new Notice("No PDF files found in vault");
+          return;
+        }
+        const { SuggestModal } = await import("obsidian");
+        class PdfPickerModal extends SuggestModal<TFile> {
+          constructor(
+            app: Parameters<typeof SuggestModal>[0],
+            private onChoose: (file: TFile) => void
+          ) {
+            super(app);
+            this.setPlaceholder("Select a PDF file to index…");
+          }
+          getSuggestions(query: string): TFile[] {
+            return files.filter((f) =>
+              f.path.toLowerCase().includes(query.toLowerCase())
+            );
+          }
+          renderSuggestion(file: TFile, el: HTMLElement): void {
+            el.createEl("div", { text: file.name });
+            el.createEl("small", { text: file.path, cls: "u-muted" });
+          }
+          onChooseSuggestion(file: TFile): void {
+            this.onChoose(file);
+          }
+        }
+        new PdfPickerModal(this.app, async (file) => {
+          try {
+            const absPath = (this.app.vault.adapter as { basePath?: string }).basePath
+              ? `${(this.app.vault.adapter as { basePath: string }).basePath}/${file.path}`
+              : file.path;
+            const result = await this.client.ingestPdf(absPath);
+            new Notice(`Indexed ${result.chunks_added} chunks from ${file.name}`);
+          } catch (err) {
+            new Notice(`Failed to index PDF: ${String(err)}`);
+          }
+        }).open();
+      },
+    });
+
+    this.addCommand({
       id: "reindex-current-note",
       name: "Reindex current note",
       callback: async () => {
