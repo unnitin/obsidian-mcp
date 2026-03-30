@@ -23,6 +23,10 @@ class IngestPdfRequest(BaseModel):
     file_path: Annotated[str, Field(min_length=1)]
 
 
+class IngestFileRequest(BaseModel):
+    file_path: Annotated[str, Field(min_length=1)]
+
+
 class RemoveDocumentRequest(BaseModel):
     file_path: Annotated[str, Field(min_length=1)]
 
@@ -56,6 +60,22 @@ def create_ingest_router(pipeline: IndexingPipeline) -> APIRouter:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="Only .pdf files are supported by this endpoint",
+            )
+        result = pipeline.index_file(path)
+        return result
+
+    @router.post("/ingest/file", response_model=IngestResult, status_code=status.HTTP_200_OK)
+    def ingest_file(req: IngestFileRequest) -> IngestResult:
+        path = Path(req.file_path)
+        if not path.exists():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"File not found: {req.file_path!r}",
+            )
+        if path.suffix.lower() != ".md":
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Only .md files are supported by this endpoint",
             )
         result = pipeline.index_file(path)
         return result

@@ -72,7 +72,7 @@ export class ApiClient {
   }
 
   async ingestMarkdown(filePath: string): Promise<IngestResult> {
-    return this.post<IngestResult>("/ingest/url", { file_path: filePath });
+    return this.post<IngestResult>("/ingest/file", { file_path: filePath });
   }
 
   async removeDocument(filePath: string): Promise<IngestResult> {
