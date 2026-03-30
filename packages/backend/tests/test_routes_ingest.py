@@ -216,6 +216,7 @@ class TestReindexRoute:
         job_id = start.json()["job_id"]
         # Poll until completed (background thread is fast with mock)
         import time
+
         for _ in range(20):
             resp = client.get(f"/reindex/{job_id}")
             if resp.json()["status"] != "running":

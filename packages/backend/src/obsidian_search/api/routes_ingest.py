@@ -27,6 +27,7 @@ class ReindexStatus(BaseModel):
     chunks_added: int = 0
     error: str | None = None
 
+
 # ── Request schemas ───────────────────────────────────────────────────────────
 
 
