@@ -108,7 +108,7 @@ def create_app(
 
     # ── Ingest routes ─────────────────────────────────────────────────────────
 
-    ingest_router = create_ingest_router(pipeline)
+    ingest_router = create_ingest_router(pipeline, settings=settings)
     app.include_router(ingest_router)
 
     return app

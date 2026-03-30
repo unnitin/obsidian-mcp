@@ -178,3 +178,48 @@ class TestRemoveDocumentRoute:
         resp = client.request("DELETE", "/index/document", json={})
         assert resp.status_code == 422
         store.close()
+
+
+class TestReindexRoute:
+    def test_start_reindex_returns_202(self, tmp_path: Path) -> None:
+        client, store = _make_client(tmp_path)
+        resp = client.post("/reindex")
+        assert resp.status_code == 202
+        body = resp.json()
+        assert body["status"] in ("running", "completed")
+        assert "job_id" in body
+        store.close()
+
+    def test_get_reindex_status_returns_job(self, tmp_path: Path) -> None:
+        client, store = _make_client(tmp_path)
+        start = client.post("/reindex")
+        job_id = start.json()["job_id"]
+        resp = client.get(f"/reindex/{job_id}")
+        assert resp.status_code == 200
+        assert resp.json()["job_id"] == job_id
+        store.close()
+
+    def test_get_unknown_job_returns_404(self, tmp_path: Path) -> None:
+        client, store = _make_client(tmp_path)
+        resp = client.get("/reindex/nonexistent-id")
+        assert resp.status_code == 404
+        store.close()
+
+    def test_reindex_indexes_md_files(self, tmp_path: Path) -> None:
+        (tmp_path / "note.md").write_text("# Hello\n\nSome content.")
+        client, store = _make_client(tmp_path)
+        with mock.patch(
+            "obsidian_search.ingestion.pipeline.IndexingPipeline.index_file",
+            return_value=IngestResult(chunks_added=2, status="ok"),
+        ):
+            start = client.post("/reindex")
+        job_id = start.json()["job_id"]
+        # Poll until completed (background thread is fast with mock)
+        import time
+        for _ in range(20):
+            resp = client.get(f"/reindex/{job_id}")
+            if resp.json()["status"] != "running":
+                break
+            time.sleep(0.1)
+        assert resp.json()["status"] == "completed"
+        store.close()
