@@ -108,6 +108,41 @@ class TestIngestPdfRoute:
         store.close()
 
 
+class TestIngestFileRoute:
+    def test_nonexistent_file_returns_404(self, tmp_path: Path) -> None:
+        client, store = _make_client(tmp_path)
+        resp = client.post("/ingest/file", json={"file_path": "/nonexistent/note.md"})
+        assert resp.status_code == 404
+        store.close()
+
+    def test_non_md_extension_returns_422(self, tmp_path: Path) -> None:
+        txt = tmp_path / "readme.txt"
+        txt.write_text("hello")
+        client, store = _make_client(tmp_path)
+        resp = client.post("/ingest/file", json={"file_path": str(txt)})
+        assert resp.status_code == 422
+        store.close()
+
+    def test_valid_md_returns_200(self, tmp_path: Path) -> None:
+        note = tmp_path / "note.md"
+        note.write_text("# Hello\n\nSome content.")
+        client, store = _make_client(tmp_path)
+        with mock.patch(
+            "obsidian_search.ingestion.pipeline.IndexingPipeline.index_file",
+            return_value=IngestResult(chunks_added=2, status="ok"),
+        ):
+            resp = client.post("/ingest/file", json={"file_path": str(note)})
+        assert resp.status_code == 200
+        assert resp.json()["chunks_added"] == 2
+        store.close()
+
+    def test_missing_file_path_returns_422(self, tmp_path: Path) -> None:
+        client, store = _make_client(tmp_path)
+        resp = client.post("/ingest/file", json={})
+        assert resp.status_code == 422
+        store.close()
+
+
 class TestRemoveDocumentRoute:
     def test_remove_existing_document(self, tmp_path: Path) -> None:
         from obsidian_search.models import Chunk, ChunkId, SourceType
