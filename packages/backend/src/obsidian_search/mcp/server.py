@@ -15,10 +15,12 @@ def _build_mcp_server(settings: Settings, store: VectorStore, embedder: Embedder
     """Construct and return the FastMCP server instance."""
     from fastmcp import FastMCP
 
+    from obsidian_search.search.reranker import Reranker
     from obsidian_search.search.searcher import Searcher
 
     pipeline = IndexingPipeline(settings=settings, store=store, embedder=embedder)
-    searcher = Searcher(settings=settings, store=store, embedder=embedder)
+    reranker = Reranker()
+    searcher = Searcher(settings=settings, store=store, embedder=embedder, reranker=reranker)
 
     mcp = FastMCP("obsidian-search")
 

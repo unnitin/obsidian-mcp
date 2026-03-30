@@ -15,6 +15,7 @@ from obsidian_search.config import Settings
 from obsidian_search.embedding.embedder import Embedder
 from obsidian_search.ingestion.pipeline import IndexingPipeline
 from obsidian_search.models import SearchResult
+from obsidian_search.search.reranker import Reranker
 from obsidian_search.search.searcher import Searcher
 from obsidian_search.store.vector_store import VectorStore
 
@@ -79,7 +80,8 @@ def create_app(
         allow_headers=["*"],
     )
 
-    searcher = Searcher(settings=settings, store=store, embedder=embedder)
+    reranker = Reranker()
+    searcher = Searcher(settings=settings, store=store, embedder=embedder, reranker=reranker)
 
     # ── Core routes ───────────────────────────────────────────────────────────
 
