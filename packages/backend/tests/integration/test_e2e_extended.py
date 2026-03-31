@@ -240,22 +240,19 @@ class TestMarkdownIngestFlow:
         stats = store.stats()
         assert stats["total_documents"] == len(NOTES)
 
-    def test_dedup_skips_unchanged_file(
-        self, pipeline: IndexingPipeline, vault: Path
-    ) -> None:
+    def test_dedup_skips_unchanged_file(self, pipeline: IndexingPipeline, vault: Path) -> None:
         pipeline.index_file(vault / "Science/Quantum.md")
         result = pipeline.index_file(vault / "Science/Quantum.md")
         assert result.chunks_added == 0
         assert result.status == "ok"
 
-    def test_modified_file_triggers_reindex(
-        self, pipeline: IndexingPipeline, vault: Path
-    ) -> None:
+    def test_modified_file_triggers_reindex(self, pipeline: IndexingPipeline, vault: Path) -> None:
         note = vault / "Science/Quantum.md"
         pipeline.index_file(note)
         note.write_text(note.read_text() + "\nExtra paragraph added.")
         future = time.time() + 2
         import os
+
         os.utime(note, (future, future))
         result = pipeline.index_file(note)
         assert result.chunks_added > 0
@@ -314,23 +311,17 @@ class TestSearchFlow:
         assert results
         assert "Pasta" in results[0].file_path
 
-    def test_scores_are_in_range(
-        self, searcher: Searcher, indexed_vault: IndexingPipeline
-    ) -> None:
+    def test_scores_are_in_range(self, searcher: Searcher, indexed_vault: IndexingPipeline) -> None:
         results = searcher.search("quantum computing")
         for r in results:
             assert 0.0 <= r.score <= 1.0
 
-    def test_scores_descending(
-        self, searcher: Searcher, indexed_vault: IndexingPipeline
-    ) -> None:
+    def test_scores_descending(self, searcher: Searcher, indexed_vault: IndexingPipeline) -> None:
         results = searcher.search("quantum computing", top_k=10)
         scores = [r.score for r in results]
         assert scores == sorted(scores, reverse=True)
 
-    def test_source_type_filter(
-        self, searcher: Searcher, indexed_vault: IndexingPipeline
-    ) -> None:
+    def test_source_type_filter(self, searcher: Searcher, indexed_vault: IndexingPipeline) -> None:
         results = searcher.search("quantum", source_types=["markdown"])
         assert all(r.source_type == "markdown" for r in results)
 
@@ -339,9 +330,7 @@ class TestSearchFlow:
         assert results
         assert all("Science" in r.file_path for r in results)
 
-    def test_top_k_respected(
-        self, searcher: Searcher, indexed_vault: IndexingPipeline
-    ) -> None:
+    def test_top_k_respected(self, searcher: Searcher, indexed_vault: IndexingPipeline) -> None:
         results = searcher.search("the a and", top_k=2)
         assert len(results) <= 2
 
@@ -378,8 +367,9 @@ class TestUrlIngestFlow:
         fake_resp = mock.MagicMock()
         fake_resp.text = FAKE_HTML
         fake_resp.raise_for_status = mock.MagicMock()
-        with mock.patch("httpx.get", return_value=fake_resp), mock.patch(
-            "trafilatura.extract", return_value=FAKE_WEB_TEXT
+        with (
+            mock.patch("httpx.get", return_value=fake_resp),
+            mock.patch("trafilatura.extract", return_value=FAKE_WEB_TEXT),
         ):
             result = pipeline.index_url("https://example.com/neural-networks")
         assert result.status == "ok"
@@ -391,8 +381,9 @@ class TestUrlIngestFlow:
         fake_resp = mock.MagicMock()
         fake_resp.text = FAKE_HTML
         fake_resp.raise_for_status = mock.MagicMock()
-        with mock.patch("httpx.get", return_value=fake_resp), mock.patch(
-            "trafilatura.extract", return_value=FAKE_WEB_TEXT
+        with (
+            mock.patch("httpx.get", return_value=fake_resp),
+            mock.patch("trafilatura.extract", return_value=FAKE_WEB_TEXT),
         ):
             pipeline.index_url("https://example.com/neural-networks")
         results = searcher.search("neural networks deep learning gradient", top_k=5)
@@ -407,8 +398,9 @@ class TestUrlIngestFlow:
         fake_resp = mock.MagicMock()
         fake_resp.text = FAKE_HTML
         fake_resp.raise_for_status = mock.MagicMock()
-        with mock.patch("httpx.get", return_value=fake_resp), mock.patch(
-            "trafilatura.extract", return_value=FAKE_WEB_TEXT
+        with (
+            mock.patch("httpx.get", return_value=fake_resp),
+            mock.patch("trafilatura.extract", return_value=FAKE_WEB_TEXT),
         ):
             pipeline.index_url(url)
         query_vec = _word_hash_encode(["neural networks"])
@@ -427,8 +419,9 @@ class TestUrlIngestFlow:
         fake_resp = mock.MagicMock()
         fake_resp.text = "<html></html>"
         fake_resp.raise_for_status = mock.MagicMock()
-        with mock.patch("httpx.get", return_value=fake_resp), mock.patch(
-            "trafilatura.extract", return_value=None
+        with (
+            mock.patch("httpx.get", return_value=fake_resp),
+            mock.patch("trafilatura.extract", return_value=None),
         ):
             result = pipeline.index_url("https://example.com/empty")
         assert result.status == "failed"
@@ -438,8 +431,9 @@ class TestUrlIngestFlow:
         fake_resp = mock.MagicMock()
         fake_resp.text = FAKE_HTML
         fake_resp.raise_for_status = mock.MagicMock()
-        with mock.patch("httpx.get", return_value=fake_resp), mock.patch(
-            "trafilatura.extract", return_value=FAKE_WEB_TEXT
+        with (
+            mock.patch("httpx.get", return_value=fake_resp),
+            mock.patch("trafilatura.extract", return_value=FAKE_WEB_TEXT),
         ):
             pipeline.index_url(url)
             result2 = pipeline.index_url(url)
@@ -451,9 +445,7 @@ class TestUrlIngestFlow:
 
 
 class TestPdfIngestFlow:
-    def test_pdf_ingest_creates_chunks(
-        self, pipeline: IndexingPipeline, tmp_path: Path
-    ) -> None:
+    def test_pdf_ingest_creates_chunks(self, pipeline: IndexingPipeline, tmp_path: Path) -> None:
         pdf = tmp_path / "ml_paper.pdf"
         pdf.write_bytes(b"%PDF-1.4 fake")
         with mock.patch("pymupdf4llm.to_markdown", return_value=FAKE_PDF_TEXT):
@@ -485,9 +477,7 @@ class TestPdfIngestFlow:
         pdf_chunks = [c for c, _ in results if c.source_type == "pdf"]
         assert pdf_chunks
 
-    def test_corrupt_pdf_returns_empty(
-        self, pipeline: IndexingPipeline, tmp_path: Path
-    ) -> None:
+    def test_corrupt_pdf_returns_empty(self, pipeline: IndexingPipeline, tmp_path: Path) -> None:
         pdf = tmp_path / "corrupt.pdf"
         pdf.write_bytes(b"not a pdf")
         with mock.patch("pymupdf4llm.to_markdown", side_effect=Exception("invalid pdf")):
@@ -519,12 +509,11 @@ class TestHTTPIngestRoutes:
         fake_resp = mock.MagicMock()
         fake_resp.text = FAKE_HTML
         fake_resp.raise_for_status = mock.MagicMock()
-        with mock.patch("httpx.get", return_value=fake_resp), mock.patch(
-            "trafilatura.extract", return_value=FAKE_WEB_TEXT
+        with (
+            mock.patch("httpx.get", return_value=fake_resp),
+            mock.patch("trafilatura.extract", return_value=FAKE_WEB_TEXT),
         ):
-            resp = client.post(
-                "/ingest/url", json={"url": "https://example.com/neural-networks"}
-            )
+            resp = client.post("/ingest/url", json={"url": "https://example.com/neural-networks"})
         assert resp.status_code == 200
         assert resp.json()["chunks_added"] > 0
 
@@ -617,9 +606,7 @@ class TestMCPToolsE2E:
     ) -> tuple[IndexingPipeline, Searcher]:
         pipeline = IndexingPipeline(settings=settings, store=store, embedder=embedder)
         reranker = FakeReranker()
-        searcher = Searcher(
-            settings=settings, store=store, embedder=embedder, reranker=reranker
-        )
+        searcher = Searcher(settings=settings, store=store, embedder=embedder, reranker=reranker)
         return pipeline, searcher
 
     def test_search_notes_tool(
@@ -647,8 +634,9 @@ class TestMCPToolsE2E:
         fake_resp = mock.MagicMock()
         fake_resp.text = FAKE_HTML
         fake_resp.raise_for_status = mock.MagicMock()
-        with mock.patch("httpx.get", return_value=fake_resp), mock.patch(
-            "trafilatura.extract", return_value=FAKE_WEB_TEXT
+        with (
+            mock.patch("httpx.get", return_value=fake_resp),
+            mock.patch("trafilatura.extract", return_value=FAKE_WEB_TEXT),
         ):
             result = pipeline.index_url("https://example.com/ml", tags=["ai"])
         assert result.status == "ok"
