@@ -18,11 +18,20 @@ class Embedder:
 
     def _load(self) -> Any:  # noqa: ANN401
         if self._model is None:
+            import torch
             from sentence_transformers import SentenceTransformer
+
+            if torch.backends.mps.is_available():
+                device = "mps"
+            elif torch.cuda.is_available():
+                device = "cuda"
+            else:
+                device = "cpu"
 
             self._model = SentenceTransformer(
                 self.model_name,
                 trust_remote_code=True,
+                device=device,
             )
         return self._model
 

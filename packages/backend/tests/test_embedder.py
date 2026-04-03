@@ -19,10 +19,12 @@ def _mock_model(output_dims: int = 768) -> MagicMock:
 
 class TestEmbedderLoad:
     def test_load_calls_sentence_transformer(self) -> None:
-        """Covers lines 20-26: _load initialises the model on first call.
+        """Covers _load: initialises the model on first call with correct args.
 
         SentenceTransformer is a local import inside _load(), so we patch
         the module it comes from rather than the embedder module's namespace.
+        _load also passes device= (mps/cuda/cpu), so we check only the
+        positional arg and trust_remote_code rather than the full call signature.
         """
         e = Embedder(model_name="fake-model")
         mock_model = _mock_model()
@@ -31,7 +33,10 @@ class TestEmbedderLoad:
             return_value=mock_model,
         ) as MockST:
             loaded = e._load()
-        MockST.assert_called_once_with("fake-model", trust_remote_code=True)
+        args, kwargs = MockST.call_args
+        assert args[0] == "fake-model"
+        assert kwargs.get("trust_remote_code") is True
+        assert "device" in kwargs
         assert loaded is mock_model
 
     def test_load_cached_on_second_call(self) -> None:
