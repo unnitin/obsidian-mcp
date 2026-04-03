@@ -77,6 +77,85 @@ class TestSearcherScores:
         store.close()
 
 
+class TestSearcherWithReranker:
+    """Verify that reranker logits are sigmoid-normalised, not treated as distances."""
+
+    def _make_with_reranker(
+        self, tmp_path: Path, logit_scores: list[float]
+    ) -> tuple[Searcher, VectorStore]:
+        from obsidian_search.models import Chunk, ChunkId, SourceType
+        from obsidian_search.search.reranker import Reranker
+
+        settings = Settings(vault_path=str(tmp_path))
+        store = VectorStore(tmp_path / "test.db")
+        store.initialize(dims=DIMS)
+        embedder = Embedder.__new__(Embedder)
+        embedder.encode = _fake_encode  # type: ignore[method-assign]
+        embedder.dims = DIMS
+
+        # Insert one chunk per logit score so reranker has something to operate on
+        chunks = []
+        vecs = []
+        for i, _ in enumerate(logit_scores):
+            chunk = Chunk(
+                id=ChunkId.generate(f"note{i}.md", 0),
+                source_type=SourceType.MARKDOWN,
+                file_path=f"note{i}.md",
+                content=f"Content {i}",
+                mtime=float(1_700_000_000 + i),
+                chunk_index=0,
+                metadata={},
+            )
+            chunks.append(chunk)
+            vecs.append(_fake_encode([f"Content {i}"])[0])
+        store.upsert_chunks(chunks, np.array(vecs, dtype=np.float32))
+
+        # Fake reranker that returns fixed logit scores in the provided order
+        fake_logits = list(logit_scores)
+
+        class _FixedReranker(Reranker):
+            def __init__(self) -> None:  # skip model loading
+                pass
+
+            def rerank(
+                self,
+                query: str,
+                candidates: list[tuple[Chunk, float]],  # noqa: ARG002
+            ) -> list[tuple[Chunk, float]]:
+                return [(chunk, fake_logits[i]) for i, (chunk, _) in enumerate(candidates)]
+
+        searcher = Searcher(
+            settings=settings, store=store, embedder=embedder, reranker=_FixedReranker()
+        )
+        return searcher, store
+
+    def test_reranker_scores_in_0_1(self, tmp_path: Path) -> None:
+        """Sigmoid of any logit must land in (0, 1)."""
+        searcher, store = self._make_with_reranker(tmp_path, [10.0, -10.0, 0.0])
+        results = searcher.search("test", top_k=3)
+        assert results
+        for r in results:
+            assert 0.0 < r.score < 1.0, f"score {r.score} not in (0, 1)"
+        store.close()
+
+    def test_reranker_large_logit_not_treated_as_distance(self, tmp_path: Path) -> None:
+        """dist²/2 of logit=10 would give score=-49; sigmoid gives ~1.0 instead."""
+        searcher, store = self._make_with_reranker(tmp_path, [10.0])
+        results = searcher.search("test", top_k=1)
+        assert results
+        # sigmoid(10) ≈ 0.9999546 — must not be negative or >1
+        assert results[0].score > 0.99
+        store.close()
+
+    def test_reranker_ordering_preserved(self, tmp_path: Path) -> None:
+        """Higher logit → higher score → first result."""
+        searcher, store = self._make_with_reranker(tmp_path, [5.0, -5.0])
+        results = searcher.search("test", top_k=2)
+        assert len(results) == 2
+        assert results[0].score > results[1].score
+        store.close()
+
+
 class TestSearcherFilters:
     def test_source_type_filter(self, tmp_path: Path) -> None:
         searcher, store = _make_searcher(tmp_path, populated=True)
