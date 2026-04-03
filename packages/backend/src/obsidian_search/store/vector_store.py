@@ -92,8 +92,13 @@ class VectorStore:
                         json.dumps(chunk.metadata),
                     ),
                 )
+                # sqlite-vec virtual tables don't support INSERT OR REPLACE;
+                # delete the old row first, then insert.
                 conn.execute(
-                    "INSERT OR REPLACE INTO chunk_embeddings (chunk_id, embedding) VALUES (?, ?)",
+                    "DELETE FROM chunk_embeddings WHERE chunk_id = ?", (chunk.id,)
+                )
+                conn.execute(
+                    "INSERT INTO chunk_embeddings (chunk_id, embedding) VALUES (?, ?)",
                     (chunk.id, _pack(vec)),
                 )
             conn.commit()
