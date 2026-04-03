@@ -22,12 +22,17 @@ class TestPDFChunkerImportError:
 
 
 class TestPDFChunkerExtraction:
+    # page_chunks=True returns list[dict]; helper to build the mock return value.
+    @staticmethod
+    def _pages(md: str, page: int = 1) -> list[dict]:
+        return [{"metadata": {"page": page}, "text": md}]
+
     def test_empty_extraction_returns_empty_list(self, tmp_path: Path) -> None:
         """covers the `not md_text.strip()` early return."""
         pdf = tmp_path / "empty.pdf"
         pdf.write_bytes(b"")
         pymupdf_mock = mock.MagicMock()
-        pymupdf_mock.to_markdown.return_value = "   "  # whitespace only
+        pymupdf_mock.to_markdown.return_value = self._pages("   ")  # whitespace only
         with mock.patch.dict(sys.modules, {"pymupdf4llm": pymupdf_mock}):
             chunker = PDFChunker(min_tokens=1)
             result = chunker.chunk(pdf, MTIME)
@@ -49,7 +54,7 @@ class TestPDFChunkerExtraction:
         pdf.write_bytes(b"fake pdf")
         md = "# Introduction\n\nThis paper discusses a very important topic in detail."
         pymupdf_mock = mock.MagicMock()
-        pymupdf_mock.to_markdown.return_value = md
+        pymupdf_mock.to_markdown.return_value = self._pages(md)
         with mock.patch.dict(sys.modules, {"pymupdf4llm": pymupdf_mock}):
             chunker = PDFChunker(min_tokens=1)
             result = chunker.chunk(pdf, MTIME)
@@ -61,7 +66,7 @@ class TestPDFChunkerExtraction:
         pdf.write_bytes(b"fake")
         md = "# A\n\nContent A.\n\n# B\n\nContent B."
         pymupdf_mock = mock.MagicMock()
-        pymupdf_mock.to_markdown.return_value = md
+        pymupdf_mock.to_markdown.return_value = self._pages(md)
         with mock.patch.dict(sys.modules, {"pymupdf4llm": pymupdf_mock}):
             chunker = PDFChunker(min_tokens=1)
             result = chunker.chunk(pdf, MTIME)
@@ -71,7 +76,7 @@ class TestPDFChunkerExtraction:
         pdf = tmp_path / "paper.pdf"
         pdf.write_bytes(b"fake")
         pymupdf_mock = mock.MagicMock()
-        pymupdf_mock.to_markdown.return_value = "# Title\n\nSome content here."
+        pymupdf_mock.to_markdown.return_value = self._pages("# Title\n\nSome content here.")
         with mock.patch.dict(sys.modules, {"pymupdf4llm": pymupdf_mock}):
             chunker = PDFChunker(min_tokens=1)
             result = chunker.chunk(pdf, MTIME)
@@ -81,8 +86,21 @@ class TestPDFChunkerExtraction:
         pdf = tmp_path / "paper.pdf"
         pdf.write_bytes(b"fake")
         pymupdf_mock = mock.MagicMock()
-        pymupdf_mock.to_markdown.return_value = "# Title\n\nSome content here."
+        pymupdf_mock.to_markdown.return_value = self._pages("# Title\n\nSome content here.")
         with mock.patch.dict(sys.modules, {"pymupdf4llm": pymupdf_mock}):
             chunker = PDFChunker(min_tokens=1)
             result = chunker.chunk(pdf, MTIME)
         assert all(c.mtime == MTIME for c in result)
+
+    def test_page_number_stored_in_metadata(self, tmp_path: Path) -> None:
+        """page_number must be written into each chunk's metadata."""
+        pdf = tmp_path / "paper.pdf"
+        pdf.write_bytes(b"fake")
+        md = "# Title\n\nSome content here for page three."
+        pymupdf_mock = mock.MagicMock()
+        pymupdf_mock.to_markdown.return_value = self._pages(md, page=3)
+        with mock.patch.dict(sys.modules, {"pymupdf4llm": pymupdf_mock}):
+            chunker = PDFChunker(min_tokens=1)
+            result = chunker.chunk(pdf, MTIME)
+        assert result
+        assert all(c.metadata.get("page_number") == 3 for c in result)
