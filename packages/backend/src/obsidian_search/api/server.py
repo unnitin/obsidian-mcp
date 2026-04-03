@@ -80,7 +80,7 @@ def create_app(
         allow_headers=["*"],
     )
 
-    reranker = Reranker()
+    reranker = Reranker(model_name=settings.reranker_model)
     searcher = Searcher(settings=settings, store=store, embedder=embedder, reranker=reranker)
 
     # ── Core routes ───────────────────────────────────────────────────────────

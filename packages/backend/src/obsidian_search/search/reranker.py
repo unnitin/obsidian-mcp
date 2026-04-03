@@ -1,4 +1,8 @@
-"""Cross-encoder reranker — ms-marco-MiniLM-L-6-v2 (lazy-loaded)."""
+"""Cross-encoder reranker (lazy-loaded).
+
+Model selection is driven by Settings.reranker_model so it can be overridden
+via the OBSIDIAN_SEARCH_RERANKER_MODEL environment variable without code changes.
+"""
 
 from __future__ import annotations
 
@@ -7,8 +11,6 @@ from typing import Any
 import numpy as np
 
 from obsidian_search.models import Chunk
-
-_MODEL_NAME = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 
 
 class Reranker:
@@ -19,15 +21,17 @@ class Reranker:
     On Apple Silicon the MPS backend is used automatically.
     """
 
-    def __init__(self, model_name: str = _MODEL_NAME) -> None:
+    def __init__(self, model_name: str) -> None:
         self.model_name = model_name
         self._model: Any = None
 
     def _load(self) -> Any:  # noqa: ANN401
         if self._model is None:
+            import torch
             from sentence_transformers import CrossEncoder
 
-            self._model = CrossEncoder(self.model_name)
+            device = "mps" if torch.backends.mps.is_available() else "cpu"
+            self._model = CrossEncoder(self.model_name, device=device)
         return self._model
 
     def rerank(

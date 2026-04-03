@@ -5,8 +5,12 @@ from __future__ import annotations
 import unittest.mock as mock
 
 import numpy as np
+from obsidian_search.config import Settings
 from obsidian_search.models import Chunk, ChunkId, SourceType
 from obsidian_search.search.reranker import Reranker
+
+# Pull the default model name from Settings so tests stay in sync with config.
+_RERANKER_MODEL = Settings.model_fields["reranker_model"].default
 
 
 def _chunk(content: str = "Some content.", idx: int = 0) -> Chunk:
@@ -28,7 +32,7 @@ class TestRerankerLoad:
             instance.predict.return_value = np.array([0.5], dtype=np.float32)
             ce_cls.return_value = instance
 
-            reranker = Reranker()
+            reranker = Reranker(model_name=_RERANKER_MODEL)
             assert reranker._model is None
 
             candidates = [(_chunk(), 0.3)]
@@ -41,7 +45,7 @@ class TestRerankerLoad:
             instance.predict.return_value = np.array([0.5], dtype=np.float32)
             ce_cls.return_value = instance
 
-            reranker = Reranker()
+            reranker = Reranker(model_name=_RERANKER_MODEL)
             candidates = [(_chunk(), 0.3)]
             reranker.rerank("q", candidates)
             reranker.rerank("q", candidates)  # second call
@@ -51,7 +55,7 @@ class TestRerankerLoad:
 class TestRerankerRerank:
     def _make_reranker(self, scores: list[float]) -> Reranker:
         r = Reranker.__new__(Reranker)
-        r.model_name = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+        r.model_name = _RERANKER_MODEL
         mock_model = mock.MagicMock()
         mock_model.predict.return_value = np.array(scores, dtype=np.float32)
         r._model = mock_model
@@ -88,6 +92,6 @@ class TestRerankerRerank:
         for _, score in result:
             assert isinstance(score, float)
 
-    def test_default_model_name(self) -> None:
-        r = Reranker()
-        assert "ms-marco" in r.model_name
+    def test_model_name_matches_config_default(self) -> None:
+        r = Reranker(model_name=_RERANKER_MODEL)
+        assert r.model_name == _RERANKER_MODEL

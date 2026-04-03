@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     embedding_model: str = "nomic-ai/nomic-embed-text-v1.5"
     embedding_batch_size: int = 32
 
+    # Reranking
+    reranker_model: str = "BAAI/bge-reranker-base"
+
     # Chunking
     chunk_max_tokens: int = 512
     chunk_min_tokens: int = 64
