@@ -34,7 +34,7 @@ class Searcher:
             top_k = self.settings.default_top_k
 
         # Embed query
-        query_vec: np.ndarray = self.embedder.encode([query])[0]
+        query_vec: np.ndarray = self.embedder.encode_query(query)
 
         # ANN search — fetch more candidates than needed for post-filtering / reranking
         candidates = self.store.search(

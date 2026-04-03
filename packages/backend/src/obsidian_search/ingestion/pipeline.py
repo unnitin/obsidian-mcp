@@ -67,7 +67,7 @@ class IndexingPipeline:
 
         # Embed in batches
         texts = [c.content for c in chunks]
-        embeddings = self.embedder.encode(texts)
+        embeddings = self.embedder.encode_documents(texts)
 
         self.store.upsert_chunks(chunks, embeddings)
         return IngestResult(chunks_added=len(chunks), chunks_removed=removed, status="ok")
@@ -86,6 +86,6 @@ class IndexingPipeline:
             return IngestResult(chunks_added=0, status="failed")
 
         removed = self.store.delete_by_file(url)
-        embeddings = self.embedder.encode([c.content for c in chunks])
+        embeddings = self.embedder.encode_documents([c.content for c in chunks])
         self.store.upsert_chunks(chunks, embeddings)
         return IngestResult(chunks_added=len(chunks), chunks_removed=removed, status="ok")
