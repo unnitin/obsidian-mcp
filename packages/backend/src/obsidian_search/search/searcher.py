@@ -6,7 +6,7 @@ import numpy as np
 
 from obsidian_search.config import Settings
 from obsidian_search.embedding.embedder import Embedder
-from obsidian_search.models import SearchResult, SourceType
+from obsidian_search.models import Chunk, SearchResult, SourceType
 from obsidian_search.store.vector_store import VectorStore
 
 
@@ -47,19 +47,27 @@ class Searcher:
         if not candidates:
             return []
 
-        # Optional cross-encoder reranking
+        # Convert ANN L2 distances → cosine similarity scores in [0, 1].
+        # sqlite-vec returns L2 distance on normalised vectors; cosine sim = 1 - dist²/2
+        ann_scored: list[tuple[Chunk, float]] = [
+            (chunk, float(np.clip(1.0 - (dist**2) / 2.0, 0.0, 1.0))) for chunk, dist in candidates
+        ]
+
+        # Optional cross-encoder reranking.
+        # The reranker returns raw logits (unbounded). We apply sigmoid so the
+        # final scores are in (0, 1) and remain comparable with the ANN scores.
         if self._reranker is not None:
             from obsidian_search.search.reranker import Reranker
 
             if isinstance(self._reranker, Reranker):
-                candidates = self._reranker.rerank(query, candidates)
+                logit_candidates = self._reranker.rerank(query, ann_scored)
+                ann_scored = [
+                    (chunk, float(1.0 / (1.0 + np.exp(-logit))))
+                    for chunk, logit in logit_candidates
+                ]
 
-        # Convert cosine distances to similarity scores in [0, 1]
-        # sqlite-vec returns L2 distance on normalised vectors; cosine distance = dist²/2
-        # We convert: score = 1 - (dist² / 2), clamped to [0, 1]
         results: list[SearchResult] = []
-        for chunk, dist in candidates[:top_k]:
-            score = float(np.clip(1.0 - (dist**2) / 2.0, 0.0, 1.0))
+        for chunk, score in ann_scored[:top_k]:
             results.append(
                 SearchResult(
                     chunk_id=chunk.id,
