@@ -40,34 +40,43 @@ class PDFChunker:
 
         file_path = str(path)
         try:
-            md_text: str = pymupdf4llm.to_markdown(str(path))
+            # page_chunks=True returns one markdown string per page so we can
+            # track which page each chunk originated from.
+            pages: list[dict[str, Any]] = pymupdf4llm.to_markdown(str(path), page_chunks=True)
         except Exception:  # noqa: BLE001
             return []
 
-        if not md_text.strip():
+        if not pages:
             return []
 
-        # Use MarkdownChunker on the converted text; override source_type afterwards
-        raw_chunks = self._md_chunker.chunk(
-            content=md_text,
-            file_path=file_path,
-            mtime=mtime,
-        )
-
-        # Re-stamp with PDF source type and regenerate stable IDs
         chunks: list[Chunk] = []
-        for idx, c in enumerate(raw_chunks):
-            meta: dict[str, Any] = {**c.metadata}
-            chunks.append(
-                Chunk(
-                    id=ChunkId.generate(file_path, idx),
-                    source_type=SourceType.PDF,
-                    file_path=file_path,
-                    header_path=c.header_path,
-                    content=c.content,
-                    mtime=mtime,
-                    chunk_index=idx,
-                    metadata=meta,
-                )
+        idx = 0
+        for page in pages:
+            page_num: int = page.get("metadata", {}).get("page", 1)  # already 1-indexed
+            md_text: str = page.get("text", "")
+            if not md_text.strip():
+                continue
+
+            raw_chunks = self._md_chunker.chunk(
+                content=md_text,
+                file_path=file_path,
+                mtime=mtime,
             )
+
+            for c in raw_chunks:
+                meta: dict[str, Any] = {**c.metadata, "page_number": page_num}
+                chunks.append(
+                    Chunk(
+                        id=ChunkId.generate(file_path, idx),
+                        source_type=SourceType.PDF,
+                        file_path=file_path,
+                        header_path=c.header_path,
+                        content=c.content,
+                        mtime=mtime,
+                        chunk_index=idx,
+                        metadata=meta,
+                    )
+                )
+                idx += 1
+
         return chunks

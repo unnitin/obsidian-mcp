@@ -102,9 +102,9 @@ class MarkdownChunker:
                 continue
 
             header = section.header_path
-            chunk_texts = self._process_block(text, header)
+            chunk_pairs = self._process_block(text, header)
 
-            for ct in chunk_texts:
+            for ct, block_meta in chunk_pairs:
                 ct = ct.strip()
                 if not ct:
                     continue
@@ -120,6 +120,7 @@ class MarkdownChunker:
                         metadata={
                             "tags": tags,
                             **{k: v for k, v in metadata.items() if k != "tags"},
+                            **block_meta,
                         },
                     )
                 )
@@ -172,31 +173,39 @@ class MarkdownChunker:
 
         return sections
 
-    def _process_block(self, text: str, header: str) -> list[str]:
-        """Detect special blocks; fall back to sentence splitting for long text."""
+    def _process_block(self, text: str, header: str) -> list[tuple[str, dict[str, Any]]]:
+        """Detect special blocks; fall back to sentence splitting for long text.
+
+        Returns a list of (chunk_text, extra_metadata) pairs. extra_metadata is
+        merged into the chunk's metadata dict, carrying chunk_type, callout_type,
+        and figure_name where applicable.
+        """
+        lines = text.splitlines()
+        first = lines[0] if lines else ""
+
         # Mermaid diagram — index DSL as atomic chunk
-        if _MERMAID_OPEN.match(text.splitlines()[0]) if text.splitlines() else False:
-            return [text]
+        if _MERMAID_OPEN.match(first):
+            return [(text, {"chunk_type": "mermaid"})]
 
         # Table — atomic; split on row boundaries if oversized
-        if all(
-            _TABLE_ROW.match(row) or not row.strip() for row in text.splitlines() if row.strip()
-        ):
-            return self._split_table(text)
+        if all(_TABLE_ROW.match(row) or not row.strip() for row in lines if row.strip()):
+            return [(t, {"chunk_type": "table"}) for t in self._split_table(text)]
 
         # Callout block
-        if _CALLOUT.match(text.splitlines()[0]) if text.splitlines() else False:
-            return [text]
+        m = _CALLOUT.match(first)
+        if m:
+            return [(text, {"chunk_type": "callout", "callout_type": m.group(1).lower()})]
 
         # Figure embed — keep surrounding context
-        if _FIGURE.search(text):
-            return [text]
+        fig = _FIGURE.search(text)
+        if fig:
+            return [(text, {"chunk_type": "figure_context", "figure_name": fig.group(1)})]
 
         # Regular text — split if too long
         if _tokens(text) <= self.max_tokens:
-            return [text]
+            return [(text, {})]
 
-        return _split_sentences(text, self.max_tokens, self.overlap_tokens)
+        return [(t, {}) for t in _split_sentences(text, self.max_tokens, self.overlap_tokens)]
 
     def _split_table(self, text: str) -> list[str]:
         lines = text.splitlines()

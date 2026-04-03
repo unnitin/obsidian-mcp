@@ -5,7 +5,7 @@ Mocked externals (no network, no model download, no GPU):
   - sentence-transformers / CrossEncoder  → word-hash FakeEmbedder + FakeReranker
   - httpx.get                             → returns fake HTML
   - trafilatura.extract                   → returns fake markdown text
-  - pymupdf4llm.to_markdown               → returns fake markdown text
+  - pymupdf4llm.to_markdown               → returns fake page_chunks list
 
 Every test exercises a real path through the code:
   markdown → chunk → embed → sqlite-vec → search
@@ -62,6 +62,9 @@ The model learns to map inputs to outputs by minimising a loss function.
 Unsupervised learning finds structure in unlabelled data through
 clustering, dimensionality reduction, and generative modelling.
 """
+
+# page_chunks=True returns a list of dicts; mock must match this shape.
+FAKE_PDF_PAGES = [{"metadata": {"page": 1}, "text": FAKE_PDF_TEXT}]
 
 NOTES: dict[str, str] = {
     "Science/Quantum.md": """\
@@ -448,7 +451,7 @@ class TestPdfIngestFlow:
     def test_pdf_ingest_creates_chunks(self, pipeline: IndexingPipeline, tmp_path: Path) -> None:
         pdf = tmp_path / "ml_paper.pdf"
         pdf.write_bytes(b"%PDF-1.4 fake")
-        with mock.patch("pymupdf4llm.to_markdown", return_value=FAKE_PDF_TEXT):
+        with mock.patch("pymupdf4llm.to_markdown", return_value=FAKE_PDF_PAGES):
             result = pipeline.index_file(pdf)
         assert result.status == "ok"
         assert result.chunks_added > 0
@@ -458,7 +461,7 @@ class TestPdfIngestFlow:
     ) -> None:
         pdf = tmp_path / "ml_paper.pdf"
         pdf.write_bytes(b"%PDF-1.4 fake")
-        with mock.patch("pymupdf4llm.to_markdown", return_value=FAKE_PDF_TEXT):
+        with mock.patch("pymupdf4llm.to_markdown", return_value=FAKE_PDF_PAGES):
             pipeline.index_file(pdf)
         results = searcher.search("supervised learning labelled examples loss function", top_k=5)
         assert results
@@ -470,7 +473,7 @@ class TestPdfIngestFlow:
     ) -> None:
         pdf = tmp_path / "ml_paper.pdf"
         pdf.write_bytes(b"%PDF-1.4 fake")
-        with mock.patch("pymupdf4llm.to_markdown", return_value=FAKE_PDF_TEXT):
+        with mock.patch("pymupdf4llm.to_markdown", return_value=FAKE_PDF_PAGES):
             pipeline.index_file(pdf)
         query_vec = _word_hash_encode(["supervised learning"])
         results = store.search(query_vec[0], top_k=10)
@@ -525,7 +528,7 @@ class TestHTTPIngestRoutes:
     def test_ingest_pdf_route(self, client: TestClient, tmp_path: Path) -> None:
         pdf = tmp_path / "paper.pdf"
         pdf.write_bytes(b"%PDF-1.4 fake")
-        with mock.patch("pymupdf4llm.to_markdown", return_value=FAKE_PDF_TEXT):
+        with mock.patch("pymupdf4llm.to_markdown", return_value=FAKE_PDF_PAGES):
             resp = client.post("/ingest/pdf", json={"file_path": str(pdf)})
         assert resp.status_code == 200
         assert resp.json()["chunks_added"] > 0
@@ -651,7 +654,7 @@ class TestMCPToolsE2E:
         pipeline, searcher = mcp_deps
         pdf = tmp_path / "paper.pdf"
         pdf.write_bytes(b"%PDF-1.4 fake")
-        with mock.patch("pymupdf4llm.to_markdown", return_value=FAKE_PDF_TEXT):
+        with mock.patch("pymupdf4llm.to_markdown", return_value=FAKE_PDF_PAGES):
             result = pipeline.index_file(pdf)
         assert result.status == "ok"
         results = searcher.search("supervised learning loss function", top_k=5)
