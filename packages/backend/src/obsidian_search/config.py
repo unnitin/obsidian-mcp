@@ -28,7 +28,10 @@ class Settings(BaseSettings):
     embedding_model: str = "nomic-ai/nomic-embed-text-v1.5"
     embedding_batch_size: int = 32
 
-    # Reranking
+    # Reranking — disabled by default; ANN scores from nomic-embed-text are
+    # more discriminative than cross-encoder logits for personal notes.
+    # Set OBSIDIAN_SEARCH_RERANKER_ENABLED=true to enable.
+    reranker_enabled: bool = False
     reranker_model: str = "BAAI/bge-reranker-base"
 
     # Chunking
