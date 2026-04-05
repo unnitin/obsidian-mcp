@@ -203,6 +203,9 @@ def main() -> None:
     store.initialize(dims=768)
 
     embedder = Embedder(model_name=settings.embedding_model)
+    # Warm up the embedding model now so the first tool call isn't slow.
+    # Claude Desktop can time out if the first response takes >10s.
+    embedder._load()
     logging.info("store and embedder ready, vault=%s", settings.vault_path)
 
     mcp = _build_mcp_server(settings=settings, store=store, embedder=embedder)
