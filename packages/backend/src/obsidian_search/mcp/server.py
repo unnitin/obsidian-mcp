@@ -68,15 +68,21 @@ def _build_mcp_server(settings: Settings, store: VectorStore, embedder: Embedder
         Returns:
             The full text content of the file, or an error message.
         """
-        path = Path(file_path)
-        if not path.is_absolute():
-            path = settings.vault_path / file_path
-        if not path.exists():
-            return f"Error: file not found: {file_path!r}"
         try:
+            path = Path(file_path)
+            # Resolve vault-relative paths
+            if not path.is_absolute():
+                path = settings.vault_path / file_path
+            # Prevent path traversal outside the vault
+            try:
+                path.resolve().relative_to(settings.vault_path.resolve())
+            except ValueError:
+                return f"Error: path is outside the vault: {file_path!r}"
+            if not path.exists():
+                return f"Error: file not found: {file_path!r}"
             return path.read_text(encoding="utf-8")
         except Exception as exc:  # noqa: BLE001
-            return f"Error reading file: {exc}"
+            return f"Error: {exc}"
 
     @mcp.tool()
     def index_url(url: str, tags: list[str] | None = None) -> dict[str, Any]:
@@ -179,6 +185,17 @@ def _build_mcp_server(settings: Settings, store: VectorStore, embedder: Embedder
 
 def main() -> None:
     """Start the MCP server over stdio (used by obsidian-search-mcp script)."""
+    import logging
+
+    # Log to a file so crashes are visible even when stdio is captured by Claude Desktop.
+    log_path = Path.home() / "Library" / "Logs" / "obsidian-search-mcp.log"
+    logging.basicConfig(
+        filename=str(log_path),
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(message)s",
+    )
+    logging.info("obsidian-search-mcp starting")
+
     settings = Settings()  # type: ignore[call-arg]  # vault_path read from env
     settings.db_dir.mkdir(parents=True, exist_ok=True)
 
@@ -186,6 +203,10 @@ def main() -> None:
     store.initialize(dims=768)
 
     embedder = Embedder(model_name=settings.embedding_model)
+    # Warm up the embedding model now so the first tool call isn't slow.
+    # Claude Desktop can time out if the first response takes >10s.
+    embedder._load()
+    logging.info("store and embedder ready, vault=%s", settings.vault_path)
 
     mcp = _build_mcp_server(settings=settings, store=store, embedder=embedder)
     mcp.run(transport="stdio")
