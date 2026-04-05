@@ -1,6 +1,6 @@
 [project]
 name = "obsidian-search"
-version = "0.1.0"
+version = "0.2.0"
 description = "Semantic search backend for Obsidian vaults"
 requires-python = ">=3.12"
 dependencies = [
