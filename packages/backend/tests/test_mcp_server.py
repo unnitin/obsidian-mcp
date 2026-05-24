@@ -22,6 +22,7 @@ def _fake_encode(texts: list[str]) -> np.ndarray:
 
 
 def _setup(tmp_path: Path) -> tuple[object, VectorStore]:
+    from obsidian_search.ingestion.pipeline import IndexingPipeline
     from obsidian_search.mcp.server import _build_mcp_server
 
     settings = Settings(vault_path=str(tmp_path))
@@ -30,7 +31,8 @@ def _setup(tmp_path: Path) -> tuple[object, VectorStore]:
     embedder = Embedder.__new__(Embedder)
     embedder.encode = _fake_encode  # type: ignore[method-assign]
     embedder.dims = DIMS
-    mcp = _build_mcp_server(settings=settings, store=store, embedder=embedder)
+    pipeline = IndexingPipeline(settings=settings, store=store, embedder=embedder)
+    mcp = _build_mcp_server(settings=settings, store=store, embedder=embedder, pipeline=pipeline)
     return mcp, store
 
 
@@ -123,11 +125,12 @@ class TestMcpGetNoteContent:
         store.close()
 
     @pytest.mark.asyncio
-    async def test_nonexistent_file_returns_error_string(self, tmp_path: Path) -> None:
+    async def test_nonexistent_file_raises_error(self, tmp_path: Path) -> None:
+        from fastmcp.exceptions import ToolError
+
         mcp, store = _setup(tmp_path)
-        result = await mcp.call_tool("get_note_content", {"file_path": "/nonexistent/ghost.md"})  # type: ignore[attr-defined]
-        text = result.content[0].text
-        assert "Error" in text
+        with pytest.raises(ToolError, match="File not found"):
+            await mcp.call_tool("get_note_content", {"file_path": str(tmp_path / "ghost.md")})  # type: ignore[attr-defined]
         store.close()
 
 

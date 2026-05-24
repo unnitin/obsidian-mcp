@@ -9,16 +9,21 @@ from obsidian_search.config import Settings
 from obsidian_search.embedding.embedder import Embedder
 from obsidian_search.ingestion.pipeline import IndexingPipeline
 from obsidian_search.store.vector_store import VectorStore
+from obsidian_search.watcher.vault_watcher import VaultWatcher
 
 
-def _build_mcp_server(settings: Settings, store: VectorStore, embedder: Embedder) -> Any:  # noqa: ANN401
+def _build_mcp_server(
+    settings: Settings,
+    store: VectorStore,
+    embedder: Embedder,
+    pipeline: IndexingPipeline,
+) -> Any:  # noqa: ANN401
     """Construct and return the FastMCP server instance."""
     from fastmcp import FastMCP
 
     from obsidian_search.search.reranker import Reranker
     from obsidian_search.search.searcher import Searcher
 
-    pipeline = IndexingPipeline(settings=settings, store=store, embedder=embedder)
     reranker = Reranker(model_name=settings.reranker_model) if settings.reranker_enabled else None
     searcher = Searcher(settings=settings, store=store, embedder=embedder, reranker=reranker)
 
@@ -34,6 +39,10 @@ def _build_mcp_server(settings: Settings, store: VectorStore, embedder: Embedder
         tags: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         """Search across all indexed Obsidian notes, PDFs, and web pages.
+
+        IMPORTANT: Always call this tool first to discover file paths before
+        reading a note. The returned `file_path` values are absolute paths —
+        pass them directly to `get_note_content` without any modification.
 
         Args:
             query: Natural-language search query.
@@ -60,29 +69,32 @@ def _build_mcp_server(settings: Settings, store: VectorStore, embedder: Embedder
 
     @mcp.tool()
     def get_note_content(file_path: str) -> str:
-        """Read the full text of a vault note by its vault-relative or absolute path.
+        """Read the full text of a vault note by its absolute path.
+
+        IMPORTANT: Never construct or guess paths manually. Always call
+        `search_notes` first and use the `file_path` value it returns.
+        Weekly notes use Mon-Fri date ranges (e.g. 0518-0522.md), not Sun-Sat.
 
         Args:
-            file_path: Path to the markdown or PDF file.
+            file_path: Absolute path to the markdown or PDF file, as returned
+                by `search_notes`.
 
         Returns:
-            The full text content of the file, or an error message.
+            The full text content of the file.
         """
+        path = Path(file_path)
+        if not path.is_absolute():
+            path = settings.vault_path / file_path
         try:
-            path = Path(file_path)
-            # Resolve vault-relative paths
-            if not path.is_absolute():
-                path = settings.vault_path / file_path
-            # Prevent path traversal outside the vault
-            try:
-                path.resolve().relative_to(settings.vault_path.resolve())
-            except ValueError:
-                return f"Error: path is outside the vault: {file_path!r}"
-            if not path.exists():
-                return f"Error: file not found: {file_path!r}"
-            return path.read_text(encoding="utf-8")
-        except Exception as exc:  # noqa: BLE001
-            return f"Error: {exc}"
+            path.resolve().relative_to(settings.vault_path.resolve())
+        except ValueError as exc:
+            raise ValueError(f"Path is outside the vault: {file_path!r}") from exc
+        if not path.exists():
+            raise FileNotFoundError(
+                f"File not found: {file_path!r}. "
+                "Call search_notes first to get the correct absolute path."
+            )
+        return path.read_text(encoding="utf-8")
 
     @mcp.tool()
     def index_url(url: str, tags: list[str] | None = None) -> dict[str, Any]:
@@ -208,8 +220,16 @@ def main() -> None:
     embedder._load()
     logging.info("store and embedder ready, vault=%s", settings.vault_path)
 
-    mcp = _build_mcp_server(settings=settings, store=store, embedder=embedder)
-    mcp.run(transport="stdio")
+    pipeline = IndexingPipeline(settings=settings, store=store, embedder=embedder)
+    watcher = VaultWatcher(settings=settings, pipeline=pipeline)
+    watcher.start()
+    logging.info("VaultWatcher started")
+
+    mcp = _build_mcp_server(settings=settings, store=store, embedder=embedder, pipeline=pipeline)
+    try:
+        mcp.run(transport="stdio")
+    finally:
+        watcher.stop()
 
 
 if __name__ == "__main__":

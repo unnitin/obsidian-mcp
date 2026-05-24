@@ -123,6 +123,15 @@ class VectorStore:
 
     # ── Read ──────────────────────────────────────────────────────────────────
 
+    def list_files(self) -> list[str]:
+        """Return distinct file paths for all vault files (markdown and PDF) in the index."""
+        rows = (
+            self._conn_()
+            .execute("SELECT DISTINCT file_path FROM chunks WHERE source_type != 'web'")
+            .fetchall()
+        )
+        return [row[0] for row in rows]
+
     def get_mtime(self, file_path: str) -> float | None:
         row = (
             self._conn_()
