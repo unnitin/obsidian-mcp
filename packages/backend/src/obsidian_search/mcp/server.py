@@ -87,8 +87,8 @@ def _build_mcp_server(
             path = settings.vault_path / file_path
         try:
             path.resolve().relative_to(settings.vault_path.resolve())
-        except ValueError:
-            raise ValueError(f"Path is outside the vault: {file_path!r}")
+        except ValueError as exc:
+            raise ValueError(f"Path is outside the vault: {file_path!r}") from exc
         if not path.exists():
             raise FileNotFoundError(
                 f"File not found: {file_path!r}. "
