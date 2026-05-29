@@ -25,7 +25,10 @@ class Settings(BaseSettings):
     port: int = 51234
 
     # Embedding
-    embedding_model: str = "nomic-ai/nomic-embed-text-v1.5"
+    # BAAI/bge-small-en-v1.5 (~130 MB, 384 dims) is the default for low memory usage.
+    # nomic-ai/nomic-embed-text-v1.5 (~1.5 GB, 768 dims) gives higher quality at the cost of RAM.
+    # Changing models on an existing vault requires deleting the DB to rebuild the index.
+    embedding_model: str = "BAAI/bge-small-en-v1.5"
     embedding_batch_size: int = 32
 
     # Reranking — disabled by default; ANN scores from nomic-embed-text are

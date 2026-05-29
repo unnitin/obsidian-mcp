@@ -18,7 +18,7 @@ class TestSettingsDefaults:
 
     def test_default_model(self) -> None:
         s = Settings(vault_path="/tmp/vault")
-        assert s.embedding_model == "nomic-ai/nomic-embed-text-v1.5"
+        assert s.embedding_model == "BAAI/bge-small-en-v1.5"
 
     def test_default_top_k(self) -> None:
         s = Settings(vault_path="/tmp/vault")

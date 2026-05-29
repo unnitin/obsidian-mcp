@@ -65,11 +65,13 @@ class IndexingPipeline:
         # Remove stale chunks for this file before upserting
         removed = self.store.delete_by_file(file_path)
 
-        # Embed in batches
-        texts = [c.content for c in chunks]
-        embeddings = self.embedder.encode_documents(texts)
+        # Embed and upsert in bounded batches to cap peak memory for large docs.
+        batch_size = self.settings.embedding_batch_size * 8  # 256 by default
+        for i in range(0, len(chunks), batch_size):
+            batch = chunks[i : i + batch_size]
+            embeddings = self.embedder.encode_documents([c.content for c in batch])
+            self.store.upsert_chunks(batch, embeddings)
 
-        self.store.upsert_chunks(chunks, embeddings)
         return IngestResult(chunks_added=len(chunks), chunks_removed=removed, status="ok")
 
     def index_url(self, url: str, tags: list[str] | None = None) -> IngestResult:
@@ -86,6 +88,9 @@ class IndexingPipeline:
             return IngestResult(chunks_added=0, status="failed")
 
         removed = self.store.delete_by_file(url)
-        embeddings = self.embedder.encode_documents([c.content for c in chunks])
-        self.store.upsert_chunks(chunks, embeddings)
+        batch_size = self.settings.embedding_batch_size * 8
+        for i in range(0, len(chunks), batch_size):
+            batch = chunks[i : i + batch_size]
+            embeddings = self.embedder.encode_documents([c.content for c in batch])
+            self.store.upsert_chunks(batch, embeddings)
         return IngestResult(chunks_added=len(chunks), chunks_removed=removed, status="ok")

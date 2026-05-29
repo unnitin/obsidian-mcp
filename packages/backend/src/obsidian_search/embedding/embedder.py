@@ -1,20 +1,25 @@
-"""Embedding model wrapper — lazy-loads nomic-embed-text-v1.5 on first use."""
+"""Embedding model wrapper — lazy-loads the configured model on first use."""
 
 from __future__ import annotations
 
+import threading
 from typing import Any
 
 import numpy as np
+
+# Models that require trust_remote_code=True (use custom pooling layers).
+_TRUST_REMOTE_CODE_MODELS = {"nomic-ai/nomic-embed-text-v1.5", "nomic-ai/nomic-embed-text-v1"}
 
 
 class Embedder:
     INDEX_PREFIX = "search_document: "
     QUERY_PREFIX = "search_query: "
 
-    def __init__(self, model_name: str = "nomic-ai/nomic-embed-text-v1.5") -> None:
+    def __init__(self, model_name: str = "BAAI/bge-small-en-v1.5") -> None:
         self.model_name = model_name
-        self.dims = 768
+        self.dims: int = 0  # set from actual model after _load()
         self._model: Any = None
+        self._sem = threading.Semaphore(1)  # serialise encode() — no gain from parallelism
 
     def _load(self) -> Any:  # noqa: ANN401
         if self._model is None:
@@ -30,20 +35,22 @@ class Embedder:
 
             self._model = SentenceTransformer(
                 self.model_name,
-                trust_remote_code=True,
+                trust_remote_code=self.model_name in _TRUST_REMOTE_CODE_MODELS,
                 device=device,
             )
+            self.dims = self._model.get_sentence_embedding_dimension()
         return self._model
 
     def encode(self, texts: list[str]) -> np.ndarray:
         """Encode a batch of texts. Caller is responsible for adding task prefixes."""
         model = self._load()
-        result = model.encode(
-            texts,
-            normalize_embeddings=True,
-            batch_size=32,
-            show_progress_bar=False,
-        )
+        with self._sem:
+            result = model.encode(
+                texts,
+                normalize_embeddings=True,
+                batch_size=32,
+                show_progress_bar=False,
+            )
         return np.array(result, dtype=np.float32)
 
     def encode_documents(self, texts: list[str]) -> np.ndarray:

@@ -17,11 +17,21 @@ from obsidian_search.models import IngestResult
 # ── In-memory reindex job tracker ─────────────────────────────────────────────
 
 _jobs: dict[str, ReindexStatus] = {}
+_job_stop_events: dict[str, threading.Event] = {}
+_MAX_COMPLETED_JOBS = 20
+
+
+def _evict_finished_jobs() -> None:
+    """Remove oldest completed/failed/cancelled jobs, keeping at most _MAX_COMPLETED_JOBS."""
+    finished = [jid for jid, j in _jobs.items() if j.status not in ("running",)]
+    for jid in finished[:-_MAX_COMPLETED_JOBS]:
+        del _jobs[jid]
+        _job_stop_events.pop(jid, None)
 
 
 class ReindexStatus(BaseModel):
     job_id: str
-    status: Literal["running", "completed", "failed"]
+    status: Literal["running", "completed", "failed", "cancelled"]
     files_total: int = 0
     files_done: int = 0
     chunks_added: int = 0
@@ -109,15 +119,21 @@ def create_ingest_router(pipeline: IndexingPipeline, settings: Settings | None =
                 status_code=status.HTTP_501_NOT_IMPLEMENTED,
                 detail="Reindex requires settings to be configured",
             )
+        _evict_finished_jobs()
         job_id = str(uuid.uuid4())
         job = ReindexStatus(job_id=job_id, status="running")
+        stop = threading.Event()
         _jobs[job_id] = job
+        _job_stop_events[job_id] = stop
 
         def _run() -> None:
             try:
                 md_files = list(settings.vault_path.rglob("*.md"))
                 job.files_total = len(md_files)
                 for path in md_files:
+                    if stop.is_set():
+                        job.status = "cancelled"
+                        return
                     result = pipeline.index_file(path)
                     job.chunks_added += result.chunks_added
                     job.files_done += 1
@@ -137,6 +153,18 @@ def create_ingest_router(pipeline: IndexingPipeline, settings: Settings | None =
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"No reindex job found with id {job_id!r}",
             )
+        return job
+
+    @router.delete("/reindex/{job_id}", response_model=ReindexStatus)
+    def cancel_reindex(job_id: str) -> ReindexStatus:
+        job = _jobs.get(job_id)
+        if job is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"No reindex job found with id {job_id!r}",
+            )
+        if job.status == "running":
+            _job_stop_events[job_id].set()
         return job
 
     return router

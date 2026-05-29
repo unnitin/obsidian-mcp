@@ -211,13 +211,14 @@ def main() -> None:
     settings = Settings()  # type: ignore[call-arg]  # vault_path read from env
     settings.db_dir.mkdir(parents=True, exist_ok=True)
 
-    store = VectorStore(settings.db_path)
-    store.initialize(dims=768)
-
+    # Load the model first — dims are derived from it, needed to initialize the store.
     embedder = Embedder(model_name=settings.embedding_model)
     # Warm up the embedding model now so the first tool call isn't slow.
     # Claude Desktop can time out if the first response takes >10s.
     embedder._load()
+
+    store = VectorStore(settings.db_path)
+    store.initialize(dims=embedder.dims)
     logging.info("store and embedder ready, vault=%s", settings.vault_path)
 
     pipeline = IndexingPipeline(settings=settings, store=store, embedder=embedder)
@@ -230,6 +231,7 @@ def main() -> None:
         mcp.run(transport="stdio")
     finally:
         watcher.stop()
+        store.close()
 
 
 if __name__ == "__main__":
