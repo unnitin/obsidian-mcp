@@ -60,9 +60,7 @@ class VectorStore:
             CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT);
         """)
 
-        stored = conn.execute(
-            "SELECT value FROM metadata WHERE key = 'embedding_dims'"
-        ).fetchone()
+        stored = conn.execute("SELECT value FROM metadata WHERE key = 'embedding_dims'").fetchone()
         if stored is not None and int(stored[0]) != dims:
             raise RuntimeError(
                 f"Embedding dimension mismatch: DB was built with {stored[0]}-dim vectors "
