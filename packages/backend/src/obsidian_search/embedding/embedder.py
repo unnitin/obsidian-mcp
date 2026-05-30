@@ -58,6 +58,7 @@ class Embedder:
         """Release the device allocator cache back to the OS after encoding."""
         try:
             import torch
+
             if torch.backends.mps.is_available():
                 torch.mps.empty_cache()
             elif torch.cuda.is_available():
