@@ -51,7 +51,20 @@ class Embedder:
                 batch_size=32,
                 show_progress_bar=False,
             )
+        self._flush_device_cache()
         return np.array(result, dtype=np.float32)
+
+    def _flush_device_cache(self) -> None:
+        """Release the device allocator cache back to the OS after encoding."""
+        try:
+            import torch
+
+            if torch.backends.mps.is_available():
+                torch.mps.empty_cache()
+            elif torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:  # noqa: BLE001
+            pass
 
     def encode_documents(self, texts: list[str]) -> np.ndarray:
         prefixed = [self.INDEX_PREFIX + t for t in texts]
