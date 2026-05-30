@@ -124,10 +124,11 @@ def main() -> None:
     settings = Settings()  # type: ignore[call-arg]  # vault_path read from env
     settings.db_dir.mkdir(parents=True, exist_ok=True)
 
-    store = VectorStore(settings.db_path)
-    store.initialize(dims=768)
-
     embedder = Embedder(model_name=settings.embedding_model)
+    embedder._load()
+
+    store = VectorStore(settings.db_path)
+    store.initialize(dims=embedder.dims)
 
     app = create_app(settings=settings, store=store, embedder=embedder, start_watcher=True)
 

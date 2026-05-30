@@ -81,16 +81,18 @@ class VaultWatcher:
     def _reconcile(self) -> None:
         """Reindex changed files and evict deleted files from the index."""
         vault = self.settings.vault_path
-        md_files = [p for p in vault.rglob("*.md") if not self.settings.is_ignored_path(p)]
-        pdf_files = [p for p in vault.rglob("*.pdf") if not self.settings.is_ignored_path(p)]
-        for path in md_files + pdf_files:
-            try:
-                self.pipeline.index_file(path)
-            except Exception:  # noqa: BLE001
-                logger.exception("Reconciliation error for %s", path)
+        on_disk: set[str] = set()
+        for pattern in ("*.md", "*.pdf"):
+            for path in vault.rglob(pattern):
+                if self.settings.is_ignored_path(path):
+                    continue
+                on_disk.add(str(path))
+                try:
+                    self.pipeline.index_file(path)
+                except Exception:  # noqa: BLE001
+                    logger.exception("Reconciliation error for %s", path)
 
         # Evict index entries for vault files that no longer exist on disk.
-        on_disk = {str(p) for p in md_files + pdf_files}
         for file_path in self.pipeline.store.list_files():
             if file_path not in on_disk:
                 removed = self.pipeline.store.delete_by_file(file_path)

@@ -34,13 +34,13 @@ class VectorStore:
             self._conn.enable_load_extension(True)
             sqlite_vec.load(self._conn)
             self._conn.enable_load_extension(False)
-            self._conn.execute("PRAGMA journal_mode=DELETE")
-            self._conn.execute("PRAGMA synchronous=FULL")
+            self._conn.execute("PRAGMA journal_mode=WAL")
+            self._conn.execute("PRAGMA synchronous=NORMAL")
         return self._conn
 
     # ── Schema ────────────────────────────────────────────────────────────────
 
-    def initialize(self, dims: int = 768) -> None:
+    def initialize(self, dims: int) -> None:
         self._dims = dims
         conn = self._conn_()
         conn.executescript("""
@@ -57,12 +57,26 @@ class VectorStore:
             );
             CREATE INDEX IF NOT EXISTS idx_chunks_file_path ON chunks(file_path);
             CREATE INDEX IF NOT EXISTS idx_chunks_mtime     ON chunks(mtime);
+            CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT);
         """)
+
+        stored = conn.execute("SELECT value FROM metadata WHERE key = 'embedding_dims'").fetchone()
+        if stored is not None and int(stored[0]) != dims:
+            raise RuntimeError(
+                f"Embedding dimension mismatch: DB was built with {stored[0]}-dim vectors "
+                f"but current model produces {dims}-dim vectors. "
+                f"Delete {self.db_path} to rebuild the index."
+            )
+
         conn.execute(
             f"""CREATE VIRTUAL TABLE IF NOT EXISTS chunk_embeddings USING vec0(
                     chunk_id  TEXT PRIMARY KEY,
                     embedding FLOAT[{dims}]
                 )"""
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO metadata(key, value) VALUES('embedding_dims', ?)",
+            (str(dims),),
         )
         conn.commit()
 
@@ -125,12 +139,10 @@ class VectorStore:
 
     def list_files(self) -> list[str]:
         """Return distinct file paths for all vault files (markdown and PDF) in the index."""
-        rows = (
-            self._conn_()
-            .execute("SELECT DISTINCT file_path FROM chunks WHERE source_type != 'web'")
-            .fetchall()
+        cur = self._conn_().execute(
+            "SELECT DISTINCT file_path FROM chunks WHERE source_type != 'web'"
         )
-        return [row[0] for row in rows]
+        return [row[0] for row in cur]
 
     def get_mtime(self, file_path: str) -> float | None:
         row = (
@@ -149,31 +161,32 @@ class VectorStore:
     ) -> list[tuple[Chunk, float]]:
         conn = self._conn_()
         candidates = min(top_k * 5, 500)
-        rows = conn.execute(
-            """SELECT ce.chunk_id, ce.distance
-               FROM chunk_embeddings ce
-               WHERE ce.embedding MATCH ?
-                 AND ce.k = ?
-               ORDER BY ce.distance""",
-            (_pack(query_vector), candidates),
-        ).fetchall()
+        dist_map: dict[str, float] = {
+            r[0]: float(r[1])
+            for r in conn.execute(
+                """SELECT ce.chunk_id, ce.distance
+                   FROM chunk_embeddings ce
+                   WHERE ce.embedding MATCH ?
+                     AND ce.k = ?
+                   ORDER BY ce.distance""",
+                (_pack(query_vector), candidates),
+            )
+        }
 
-        if not rows:
+        if not dist_map:
             return []
 
-        chunk_ids = [r[0] for r in rows]
-        dist_map: dict[str, float] = {r[0]: float(r[1]) for r in rows}
-
+        chunk_ids = list(dist_map.keys())
         placeholders = ",".join("?" * len(chunk_ids))
         chunk_rows = conn.execute(
             f"""SELECT id, source_type, file_path, url, header_path,
                        content, mtime, chunk_index, metadata_json
                 FROM chunks WHERE id IN ({placeholders})""",
             chunk_ids,
-        ).fetchall()
+        )
 
         results: list[tuple[Chunk, float]] = []
-        for row in chunk_rows:
+        for row in chunk_rows:  # cursor — rows streamed, not held in a list
             meta: dict[str, Any] = json.loads(row["metadata_json"] or "{}")
 
             if source_types and str(row["source_type"]) not in source_types:

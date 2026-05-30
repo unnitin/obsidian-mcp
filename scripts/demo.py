@@ -1,15 +1,21 @@
 #!/usr/bin/env python
 """
-Demo: full indexing + search pipeline using a word-hash embedder.
-
-No model download required — uses the same deterministic embedder as the
-integration tests. To use the real nomic-embed-text-v1.5 model instead,
-pass --real-model (requires ~274MB download on first run).
+Demo and quality-comparison script for obsidian-search.
 
 Usage:
+    # Word-hash embedder (no download, instant):
     uv run --project packages/backend python scripts/demo.py
-    uv run --project packages/backend python scripts/demo.py --vault /path/to/vault
-    uv run --project packages/backend python scripts/demo.py --real-model
+
+    # Real model (uses configured default — BAAI/bge-small-en-v1.5):
+    uv run --project packages/backend python scripts/demo.py --model BAAI/bge-small-en-v1.5
+
+    # Compare two models side-by-side to check quality:
+    uv run --project packages/backend python scripts/demo.py \\
+        --compare BAAI/bge-small-en-v1.5 nomic-ai/nomic-embed-text-v1.5
+
+    # Use your own vault:
+    uv run --project packages/backend python scripts/demo.py \\
+        --vault /path/to/vault --model BAAI/bge-small-en-v1.5
 """
 
 from __future__ import annotations
@@ -22,7 +28,6 @@ from pathlib import Path
 
 import numpy as np
 
-# ── Add src to path ───────────────────────────────────────────────────────────
 sys.path.insert(0, str(Path(__file__).parent.parent / "packages/backend/src"))
 
 from obsidian_search.config import Settings
@@ -30,8 +35,6 @@ from obsidian_search.embedding.embedder import Embedder
 from obsidian_search.ingestion.pipeline import IndexingPipeline
 from obsidian_search.search.searcher import Searcher
 from obsidian_search.store.vector_store import VectorStore
-
-DIMS = 768
 
 # ── Sample vault ──────────────────────────────────────────────────────────────
 
@@ -162,16 +165,64 @@ Harry Markowitz, formalises this with the efficient frontier.
 """,
 }
 
+EVAL_QUERIES = [
+    "quantum entanglement superposition",
+    "async python coroutine event loop",
+    "pasta recipe italian dinner",
+    "sleep memory consolidation brain",
+    "compound interest investing returns",
+    "diet and cognitive performance",       # off-topic — good for precision check
+    "machine learning neural network",      # off-topic
+]
+
+# ── ANSI helpers ──────────────────────────────────────────────────────────────
+
+BOLD  = "\033[1m"
+DIM   = "\033[2m"
+GREEN = "\033[32m"
+CYAN  = "\033[36m"
+YELLOW = "\033[33m"
+RED   = "\033[31m"
+RESET = "\033[0m"
+BAR   = "─" * 72
+
+
+def _score_bar(score: float, width: int = 16) -> str:
+    filled = round(score * width)
+    return f"[{'█' * filled}{'░' * (width - filled)}] {score:.3f}"
+
+
+def _print_results(results: list, query: str, label: str = "") -> None:
+    header = f"{BOLD}Query:{RESET} {CYAN}{query!r}{RESET}"
+    if label:
+        header += f"  {DIM}({label}){RESET}"
+    print(f"\n{header}")
+    print(BAR)
+    if not results:
+        print(f"  {RED}(no results){RESET}")
+        return
+    for i, r in enumerate(results, 1):
+        fname = Path(r.file_path).name
+        hdr   = f" › {r.header_path}" if r.header_path else ""
+        snip  = textwrap.shorten(r.content.replace("\n", " ").strip(), width=72, placeholder="…")
+        print(
+            f"  {BOLD}{i}.{RESET} {GREEN}{fname}{RESET}{DIM}{hdr}{RESET}\n"
+            f"     {YELLOW}{_score_bar(r.score)}{RESET}\n"
+            f"     {DIM}{snip}{RESET}\n"
+        )
+
 
 # ── Fake embedder (word-hash, no download) ────────────────────────────────────
+
+_FAKE_DIMS = 384  # matches bge-small default
 
 
 def _word_hash_encode(texts: list[str]) -> np.ndarray:
     vecs: list[np.ndarray] = []
     for text in texts:
-        v = np.zeros(DIMS, dtype=np.float32)
+        v = np.zeros(_FAKE_DIMS, dtype=np.float32)
         for word in text.lower().split():
-            v[abs(hash(word)) % DIMS] += 1.0
+            v[abs(hash(word)) % _FAKE_DIMS] += 1.0
         norm = float(np.linalg.norm(v))
         if norm > 0:
             v /= norm
@@ -180,65 +231,130 @@ def _word_hash_encode(texts: list[str]) -> np.ndarray:
 
 
 def _make_fake_embedder() -> Embedder:
+    import threading
     e = Embedder.__new__(Embedder)
+    e.model_name = "word-hash"
+    e.dims = _FAKE_DIMS
+    e._model = object()      # truthy so _load() is a no-op
+    e._sem = threading.Semaphore(1)
     e.encode = _word_hash_encode  # type: ignore[method-assign]
-    e.dims = DIMS
     return e
 
 
-# ── Formatting helpers ────────────────────────────────────────────────────────
+# ── Single-model run ──────────────────────────────────────────────────────────
 
-BOLD = "\033[1m"
-DIM = "\033[2m"
-GREEN = "\033[32m"
-CYAN = "\033[36m"
-YELLOW = "\033[33m"
-RESET = "\033[0m"
-BAR = "─" * 72
+def _build_index(
+    embedder: Embedder,
+    vault_path: Path,
+    note_paths: list[Path],
+    db_path: Path,
+) -> tuple[Searcher, VectorStore]:
+    settings = Settings(vault_path=str(vault_path), chunk_min_tokens=5)
+    store = VectorStore(db_path)
+    store.initialize(dims=embedder.dims)
+    pipeline = IndexingPipeline(settings=settings, store=store, embedder=embedder)
+    for path in sorted(note_paths):
+        result = pipeline.index_file(path)
+        rel = path.relative_to(vault_path)
+        print(f"  {DIM}{rel}{RESET}  →  {result.chunks_added} chunks")
+    return Searcher(settings=settings, store=store, embedder=embedder), store
 
 
-def _score_bar(score: float, width: int = 20) -> str:
-    filled = round(score * width)
-    return f"[{'█' * filled}{'░' * (width - filled)}] {score:.2f}"
+# ── Compare mode ─────────────────────────────────────────────────────────────
 
+def _run_compare(
+    model_a: str,
+    model_b: str,
+    vault_path: Path,
+    note_paths: list[Path],
+) -> None:
+    """Build indexes for two models, run EVAL_QUERIES, print results side by side."""
+    import time
 
-def _print_results(results: list, query: str) -> None:
-    print(f"\n{BOLD}Query:{RESET} {CYAN}{query!r}{RESET}")
-    print(BAR)
-    if not results:
-        print("  (no results)")
-        return
-    for i, r in enumerate(results, 1):
-        path = Path(r.file_path).name
-        header = f" › {r.header_path}" if r.header_path else ""
-        excerpt = r.content.replace("\n", " ").strip()
-        excerpt = textwrap.shorten(excerpt, width=80, placeholder="…")
-        print(
-            f"  {BOLD}{i}.{RESET} {GREEN}{path}{RESET}{DIM}{header}{RESET}\n"
-            f"     {YELLOW}{_score_bar(r.score)}{RESET}\n"
-            f"     {DIM}{excerpt}{RESET}\n"
-        )
+    pairs: list[tuple[str, Searcher, VectorStore, Path]] = []
+    tmp_files: list[Path] = []
+
+    for mname in (model_a, model_b):
+        print(f"\n{BOLD}Loading {mname}…{RESET}")
+        t0 = time.perf_counter()
+        embedder = Embedder(model_name=mname)
+        embedder._load()
+        print(f"  model ready in {time.perf_counter()-t0:.1f}s  "
+              f"({embedder.dims} dims)")
+
+        tmp = Path(tempfile.NamedTemporaryFile(suffix=".db", delete=False).name)
+        tmp_files.append(tmp)
+        print(f"  indexing {len(note_paths)} notes…")
+        searcher, store = _build_index(embedder, vault_path, note_paths, tmp)
+        pairs.append((mname, searcher, store, tmp))
+
+    short = [p[0].split("/")[-1] for p in pairs]
+
+    print(f"\n{BOLD}{'═' * 72}{RESET}")
+    print(f"{BOLD}  QUALITY COMPARISON: {short[0]}  vs  {short[1]}{RESET}")
+    print(f"{BOLD}{'═' * 72}{RESET}")
+
+    for query in EVAL_QUERIES:
+        print(f"\n{BOLD}{CYAN}Q: {query!r}{RESET}")
+        rows: list[list[str]] = []
+        for mname, searcher, _, _ in pairs:
+            results = searcher.search(query, top_k=3)
+            col = [f"{BOLD}{mname.split('/')[-1]}{RESET}"]
+            if not results:
+                col.append(f"  {RED}(no results){RESET}")
+            for i, r in enumerate(results, 1):
+                fname = Path(r.file_path).name
+                hdr   = f" › {r.header_path}" if r.header_path else ""
+                col.append(
+                    f"  {i}. {GREEN}{fname}{RESET}{DIM}{hdr}{RESET}  "
+                    f"{YELLOW}{_score_bar(r.score)}{RESET}"
+                )
+            rows.append(col)
+
+        # print columns side by side
+        max_lines = max(len(c) for c in rows)
+        for c in rows:
+            while len(c) < max_lines:
+                c.append("")
+        for line_pair in zip(*rows):
+            print("  |  ".join(line_pair))
+
+    # cleanup
+    for _, _, store, tmp in pairs:
+        store.close()
+        tmp.unlink(missing_ok=True)
+
+    print(f"\n{DIM}Compare done. Check scores and file names above — "
+          f"on-topic queries should surface matching notes with score ≥ 0.5.{RESET}")
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
-
 def main() -> None:
-    parser = argparse.ArgumentParser(description="obsidian-search demo")
+    parser = argparse.ArgumentParser(description="obsidian-search demo / quality check")
     parser.add_argument("--vault", help="Path to an existing vault (indexes .md files)")
     parser.add_argument(
-        "--real-model",
-        action="store_true",
-        help="Use nomic-embed-text-v1.5 instead of the word-hash embedder",
+        "--model",
+        default=None,
+        metavar="MODEL",
+        help="HuggingFace model name to use (default: word-hash fake embedder). "
+             "Example: BAAI/bge-small-en-v1.5",
+    )
+    parser.add_argument(
+        "--compare",
+        nargs=2,
+        metavar=("MODEL_A", "MODEL_B"),
+        help="Compare two models side-by-side. "
+             "Example: --compare BAAI/bge-small-en-v1.5 nomic-ai/nomic-embed-text-v1.5",
     )
     args = parser.parse_args()
 
-    # ── Build vault ───────────────────────────────────────────────────────────
+    # ── Vault ─────────────────────────────────────────────────────────────────
     tmp_dir: tempfile.TemporaryDirectory | None = None
     if args.vault:
         vault_path = Path(args.vault)
         note_paths = list(vault_path.rglob("*.md"))
-        print(f"{BOLD}Vault:{RESET} {vault_path}  ({len(note_paths)} .md files found)")
+        print(f"{BOLD}Vault:{RESET} {vault_path}  ({len(note_paths)} .md files)")
     else:
         tmp_dir = tempfile.TemporaryDirectory()
         vault_path = Path(tmp_dir.name)
@@ -247,82 +363,60 @@ def main() -> None:
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_text(content.strip())
         note_paths = list(vault_path.rglob("*.md"))
-        print(f"{BOLD}Vault:{RESET} sample notes ({len(note_paths)} files)")
+        print(f"{BOLD}Vault:{RESET} built-in sample notes ({len(note_paths)} files)")
 
-    # ── Embedder ──────────────────────────────────────────────────────────────
-    if args.real_model:
-        print(f"{BOLD}Embedder:{RESET} nomic-embed-text-v1.5 (loading…)")
-        embedder = Embedder()
-        embedder._load()  # trigger download now so timing is visible
+    # ── Compare mode ──────────────────────────────────────────────────────────
+    if args.compare:
+        model_a, model_b = args.compare
+        _run_compare(model_a, model_b, vault_path, note_paths)
+        if tmp_dir:
+            tmp_dir.cleanup()
+        return
+
+    # ── Single-model mode ─────────────────────────────────────────────────────
+    if args.model:
+        import time
+        print(f"{BOLD}Embedder:{RESET} {args.model} (loading…)")
+        t0 = time.perf_counter()
+        embedder = Embedder(model_name=args.model)
+        embedder._load()
+        print(f"  ready in {time.perf_counter()-t0:.1f}s  ({embedder.dims} dims)")
     else:
         print(f"{BOLD}Embedder:{RESET} word-hash (deterministic, no download)")
         embedder = _make_fake_embedder()
 
-    # ── Store + settings ──────────────────────────────────────────────────────
+    # ── Index ─────────────────────────────────────────────────────────────────
     settings = Settings(vault_path=str(vault_path), chunk_min_tokens=5)
     settings.db_dir.mkdir(parents=True, exist_ok=True)
-
-    store = VectorStore(settings.db_path)
-    store.initialize(dims=DIMS)
-
-    # ── Index ─────────────────────────────────────────────────────────────────
-    pipeline = IndexingPipeline(settings=settings, store=store, embedder=embedder)
     print(f"\n{BOLD}Indexing {len(note_paths)} notes…{RESET}")
-    total_chunks = 0
-    for path in sorted(note_paths):
-        result = pipeline.index_file(path)
-        rel = path.relative_to(vault_path)
-        print(f"  {DIM}{rel}{RESET}  →  {result.chunks_added} chunks")
-        total_chunks += result.chunks_added
+    searcher, store = _build_index(embedder, vault_path, note_paths, settings.db_path)
+    s = store.stats()
+    print(f"\n{BOLD}Index:{RESET} {s['total_chunks']} chunks / {s['total_documents']} docs")
 
-    stats = store.stats()
-    print(f"\n{BOLD}Index ready:{RESET} {stats['total_chunks']} chunks "
-          f"across {stats['total_documents']} documents")
-
-    # ── Search demo ───────────────────────────────────────────────────────────
-    searcher = Searcher(settings=settings, store=store, embedder=embedder)
-
-    queries = [
-        ("quantum entanglement superposition", None, None),
-        ("async python coroutine event loop", None, None),
-        ("pasta recipe italian dinner", None, None),
-        ("sleep memory consolidation brain", None, None),
-        ("compound interest investing returns", None, None),
-        ("quantum computing", None, ["physics"]),        # tag filter
-        ("programming language", ["markdown"], None),   # source_type filter
-    ]
-
+    # ── Eval queries ──────────────────────────────────────────────────────────
     print(f"\n{BOLD}{'═' * 72}{RESET}")
-    print(f"{BOLD}  SEARCH DEMO{RESET}")
+    print(f"{BOLD}  EVAL QUERIES{RESET}  {DIM}(last 2 are off-topic — expect low scores){RESET}")
     print(f"{BOLD}{'═' * 72}{RESET}")
+    for query in EVAL_QUERIES:
+        results = searcher.search(query, top_k=3)
+        _print_results(results, query)
 
-    for query, source_types, tags in queries:
-        label = query
-        if tags:
-            label += f"  {DIM}[tag filter: {tags}]{RESET}"
-        if source_types:
-            label += f"  {DIM}[source: {source_types}]{RESET}"
-        results = searcher.search(query, top_k=3, source_types=source_types, tags=tags)
-        _print_results(results, label)
-
-    # ── Interactive mode ──────────────────────────────────────────────────────
+    # ── Interactive ───────────────────────────────────────────────────────────
     print(f"\n{BOLD}{'═' * 72}{RESET}")
-    print(f"{BOLD}  INTERACTIVE SEARCH{RESET}  {DIM}(Ctrl-C or empty query to quit){RESET}")
+    print(f"{BOLD}  INTERACTIVE{RESET}  {DIM}(empty line to quit){RESET}")
     print(f"{BOLD}{'═' * 72}{RESET}\n")
-
     try:
         while True:
             query = input(f"{BOLD}Search:{RESET} ").strip()
             if not query:
                 break
-            results = searcher.search(query, top_k=5)
-            _print_results(results, query)
+            _print_results(searcher.search(query, top_k=5), query)
     except (KeyboardInterrupt, EOFError):
         pass
 
+    store.close()
     if tmp_dir:
         tmp_dir.cleanup()
-    store.close()
     print(f"\n{DIM}Done.{RESET}")
 
 
