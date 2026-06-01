@@ -23,15 +23,13 @@ class Embedder:
 
     def _load(self) -> Any:  # noqa: ANN401
         if self._model is None:
-            import torch
             from sentence_transformers import SentenceTransformer
 
-            if torch.backends.mps.is_available():
-                device = "mps"
-            elif torch.cuda.is_available():
-                device = "cuda"
-            else:
-                device = "cpu"
+            # CPU is intentional: bge-small is fast enough on CPU for single-query
+            # workloads, and avoids ~1 GB of permanent MPS address-space overhead
+            # on Apple Silicon (unified memory maps model weights into both CPU and
+            # GPU space when using MPS).
+            device = "cpu"
 
             self._model = SentenceTransformer(
                 self.model_name,
