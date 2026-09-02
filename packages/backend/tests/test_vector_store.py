@@ -318,3 +318,152 @@ class TestConcurrentWrites:
         # All seeds deleted, all new chunks present.
         assert store.stats()["total_chunks"] == 20
         store.close()
+
+
+class TestFilteredSearchCompleteness:
+    """A filter must not silently return fewer results than the index holds."""
+
+    def _add(self, store: VectorStore, key: str, source: SourceType, tags: list[str]) -> None:
+        chunk = Chunk(
+            id=ChunkId.generate(f"/vault/{key}", 0),
+            source_type=source,
+            file_path=f"/vault/{key}",
+            content=f"content for {key}",
+            mtime=1.0,
+            chunk_index=0,
+            metadata={"tags": tags},
+        )
+        store.upsert_chunks([chunk], _vec().reshape(1, DIMS))
+
+    def test_rare_source_type_is_still_found(self, tmp_path: Path) -> None:
+        """Regression: PDFs buried past the old fixed candidate window vanished."""
+        store = _store(tmp_path)
+        for i in range(400):
+            self._add(store, f"note{i}.md", SourceType.MARKDOWN, [])
+        for i in range(3):
+            self._add(store, f"doc{i}.pdf", SourceType.PDF, [])
+
+        results = store.search(_vec(), top_k=10, source_types=["pdf"])
+        assert len(results) == 3
+        assert all(c.source_type == SourceType.PDF for c, _ in results)
+        store.close()
+
+    def test_rare_tag_is_still_found(self, tmp_path: Path) -> None:
+        store = _store(tmp_path)
+        for i in range(400):
+            self._add(store, f"note{i}.md", SourceType.MARKDOWN, ["common"])
+        self._add(store, "special.md", SourceType.MARKDOWN, ["rare"])
+
+        results = store.search(_vec(), top_k=10, tags=["rare"])
+        assert len(results) == 1
+        assert results[0][0].file_path.endswith("special.md")
+        store.close()
+
+    def test_filter_matching_nothing_returns_empty(self, tmp_path: Path) -> None:
+        store = _store(tmp_path)
+        for i in range(50):
+            self._add(store, f"note{i}.md", SourceType.MARKDOWN, [])
+        assert store.search(_vec(), top_k=10, source_types=["web"]) == []
+        store.close()
+
+    def test_unfiltered_search_does_not_widen(self, tmp_path: Path) -> None:
+        """No filter means one ANN pass — the widening loop must not kick in."""
+        store = _store(tmp_path)
+        for i in range(100):
+            self._add(store, f"note{i}.md", SourceType.MARKDOWN, [])
+
+        real_nearest = store._nearest
+        calls = []
+
+        def counting(*args: object, **kwargs: object) -> object:
+            calls.append(1)
+            return real_nearest(*args, **kwargs)  # type: ignore[arg-type]
+
+        store._nearest = counting  # type: ignore[method-assign]
+        store.search(_vec(), top_k=10)
+        assert len(calls) == 1
+        store.close()
+
+    def test_results_stay_ordered_by_distance(self, tmp_path: Path) -> None:
+        store = _store(tmp_path)
+        for i in range(100):
+            self._add(store, f"note{i}.md", SourceType.MARKDOWN, ["t"])
+        results = store.search(_vec(), top_k=20, tags=["t"])
+        distances = [d for _, d in results]
+        assert distances == sorted(distances)
+        store.close()
+
+
+class TestLastIndexedAt:
+    def test_none_before_any_write(self, tmp_path: Path) -> None:
+        store = _store(tmp_path)
+        assert store.stats()["last_indexed_at"] is None
+        store.close()
+
+    def test_set_after_a_write(self, tmp_path: Path) -> None:
+        import time
+
+        store = _store(tmp_path)
+        before = time.time()
+        store.upsert_chunks(
+            [
+                Chunk(
+                    id="c1",
+                    source_type=SourceType.MARKDOWN,
+                    file_path="/vault/a.md",
+                    content="body",
+                    mtime=1.0,
+                    chunk_index=0,
+                )
+            ],
+            _vec().reshape(1, DIMS),
+        )
+        stamped = store.stats()["last_indexed_at"]
+        assert stamped is not None
+        assert stamped >= before
+        store.close()
+
+    def test_not_derived_from_note_mtime(self, tmp_path: Path) -> None:
+        """The old behaviour returned MAX(mtime) — a note's own timestamp."""
+        import time
+
+        store = _store(tmp_path)
+        future_mtime = time.time() + 86_400
+        store.upsert_chunks(
+            [
+                Chunk(
+                    id="c1",
+                    source_type=SourceType.MARKDOWN,
+                    file_path="/vault/a.md",
+                    content="body",
+                    mtime=future_mtime,
+                    chunk_index=0,
+                )
+            ],
+            _vec().reshape(1, DIMS),
+        )
+        stamped = store.stats()["last_indexed_at"]
+        assert stamped is not None
+        assert stamped < future_mtime
+
+    def test_advances_on_delete(self, tmp_path: Path) -> None:
+        store = _store(tmp_path)
+        store.upsert_chunks(
+            [
+                Chunk(
+                    id="c1",
+                    source_type=SourceType.MARKDOWN,
+                    file_path="/vault/a.md",
+                    content="body",
+                    mtime=1.0,
+                    chunk_index=0,
+                )
+            ],
+            _vec().reshape(1, DIMS),
+        )
+        first = store.stats()["last_indexed_at"]
+        store.delete_by_file("/vault/a.md")
+        second = store.stats()["last_indexed_at"]
+        assert first is not None and second is not None
+        assert second >= first
+        store.close()
