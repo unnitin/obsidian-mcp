@@ -82,6 +82,7 @@ class IndexingPipeline:
             max_tokens=self.settings.chunk_max_tokens,
             min_tokens=self.settings.chunk_min_tokens,
             overlap_tokens=self.settings.chunk_overlap_tokens,
+            allow_private_urls=self.settings.allow_private_urls,
         )
         chunks = web_chunker.chunk(url, tags=tags)
         if not chunks:
