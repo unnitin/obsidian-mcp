@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from obsidian_search.config import Settings
-from obsidian_search.ingestion.pipeline import IndexingPipeline
+from obsidian_search.ingestion.pipeline import IndexingPipeline, iter_vault_files
 
 logger = logging.getLogger(__name__)
 
@@ -80,17 +80,13 @@ class VaultWatcher:
 
     def _reconcile(self) -> None:
         """Reindex changed files and evict deleted files from the index."""
-        vault = self.settings.vault_path
         on_disk: set[str] = set()
-        for pattern in ("*.md", "*.pdf"):
-            for path in vault.rglob(pattern):
-                if self.settings.is_ignored_path(path):
-                    continue
-                on_disk.add(str(path))
-                try:
-                    self.pipeline.index_file(path)
-                except Exception:  # noqa: BLE001
-                    logger.exception("Reconciliation error for %s", path)
+        for path in iter_vault_files(self.settings):
+            on_disk.add(str(path))
+            try:
+                self.pipeline.index_file(path)
+            except Exception:  # noqa: BLE001
+                logger.exception("Reconciliation error for %s", path)
 
         # Evict index entries for vault files that no longer exist on disk.
         for file_path in self.pipeline.store.list_files():

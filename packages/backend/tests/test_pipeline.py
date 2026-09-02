@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 from obsidian_search.config import Settings
 from obsidian_search.embedding.embedder import Embedder
-from obsidian_search.ingestion.pipeline import IndexingPipeline
+from obsidian_search.ingestion.pipeline import IndexingPipeline, iter_vault_files
 from obsidian_search.store.vector_store import VectorStore
 
 DIMS = 8
@@ -110,3 +110,45 @@ class TestIndexFileMtime:
         assert any("Updated" in c for c in contents)
         assert not any("Original" in c for c in contents)
         store.close()
+
+
+class TestIterVaultFiles:
+    """Reconciliation and /reindex must agree on what belongs in the index."""
+
+    def test_yields_markdown_and_pdf(self, tmp_path: Path) -> None:
+        (tmp_path / "note.md").write_text("# Note")
+        (tmp_path / "doc.pdf").write_bytes(b"%PDF-1.4")
+        settings = Settings(vault_path=str(tmp_path))
+        found = {p.name for p in iter_vault_files(settings)}
+        assert found == {"note.md", "doc.pdf"}
+
+    def test_skips_other_file_types(self, tmp_path: Path) -> None:
+        (tmp_path / "note.md").write_text("# Note")
+        (tmp_path / "image.png").write_bytes(b"\x89PNG")
+        (tmp_path / "readme.txt").write_text("hi")
+        settings = Settings(vault_path=str(tmp_path))
+        assert {p.name for p in iter_vault_files(settings)} == {"note.md"}
+
+    def test_skips_obsidian_system_folders(self, tmp_path: Path) -> None:
+        (tmp_path / "note.md").write_text("# Note")
+        plugin_dir = tmp_path / ".obsidian" / "plugins" / "some-plugin"
+        plugin_dir.mkdir(parents=True)
+        (plugin_dir / "README.md").write_text("# Plugin docs")
+        (tmp_path / ".obsidian-search").mkdir()
+        (tmp_path / ".obsidian-search" / "notes.md").write_text("# internal")
+        settings = Settings(vault_path=str(tmp_path))
+        assert {p.name for p in iter_vault_files(settings)} == {"note.md"}
+
+    def test_honours_excluded_folders(self, tmp_path: Path) -> None:
+        (tmp_path / "note.md").write_text("# Note")
+        (tmp_path / "Archive").mkdir()
+        (tmp_path / "Archive" / "old.md").write_text("# Old")
+        settings = Settings(vault_path=str(tmp_path), excluded_folders=["Archive"])
+        assert {p.name for p in iter_vault_files(settings)} == {"note.md"}
+
+    def test_recurses_into_subfolders(self, tmp_path: Path) -> None:
+        nested = tmp_path / "Projects" / "2026"
+        nested.mkdir(parents=True)
+        (nested / "plan.md").write_text("# Plan")
+        settings = Settings(vault_path=str(tmp_path))
+        assert {p.name for p in iter_vault_files(settings)} == {"plan.md"}
