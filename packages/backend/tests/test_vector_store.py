@@ -237,3 +237,84 @@ class TestClose:
         s = _store(tmp_path)
         s.close()
         s.close()  # second close must not raise
+
+
+class TestConcurrentWrites:
+    """A single shared connection has one transaction slot — writes must serialise."""
+
+    def _chunk(self, key: str) -> Chunk:
+        return Chunk(
+            id=f"c{key}",
+            source_type=SourceType.MARKDOWN,
+            file_path=f"/vault/{key}.md",
+            content="body text",
+            mtime=1.0,
+            chunk_index=0,
+        )
+
+    def test_parallel_upserts_all_commit(self, tmp_path: Path) -> None:
+        import threading
+
+        store = VectorStore(tmp_path / "concurrent.db")
+        store.initialize(dims=DIMS)
+
+        errors: list[str] = []
+        writes_per_thread = 25
+        threads = 4
+
+        def worker(n: int) -> None:
+            for i in range(writes_per_thread):
+                try:
+                    store.upsert_chunks(
+                        [self._chunk(f"{n}-{i}")],
+                        np.ones((1, DIMS), dtype=np.float32),
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    errors.append(f"{type(exc).__name__}: {exc}")
+
+        workers = [threading.Thread(target=worker, args=(n,)) for n in range(threads)]
+        for t in workers:
+            t.start()
+        for t in workers:
+            t.join()
+
+        assert errors == []
+        assert store.stats()["total_chunks"] == threads * writes_per_thread
+        store.close()
+
+    def test_parallel_upsert_and_delete_do_not_corrupt(self, tmp_path: Path) -> None:
+        import threading
+
+        store = VectorStore(tmp_path / "mixed.db")
+        store.initialize(dims=DIMS)
+        for i in range(20):
+            store.upsert_chunks([self._chunk(f"seed-{i}")], np.ones((1, DIMS), dtype=np.float32))
+
+        errors: list[str] = []
+
+        def deleter() -> None:
+            for i in range(20):
+                try:
+                    store.delete_by_file(f"/vault/seed-{i}.md")
+                except Exception as exc:  # noqa: BLE001
+                    errors.append(f"delete: {exc}")
+
+        def inserter() -> None:
+            for i in range(20):
+                try:
+                    store.upsert_chunks(
+                        [self._chunk(f"new-{i}")], np.ones((1, DIMS), dtype=np.float32)
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    errors.append(f"insert: {exc}")
+
+        threads = [threading.Thread(target=deleter), threading.Thread(target=inserter)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert errors == []
+        # All seeds deleted, all new chunks present.
+        assert store.stats()["total_chunks"] == 20
+        store.close()

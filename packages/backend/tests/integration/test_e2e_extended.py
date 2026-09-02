@@ -498,9 +498,13 @@ class TestHTTPIngestRoutes:
         assert resp.status_code == 200
         assert resp.json()["chunks_added"] > 0
 
-    def test_ingest_file_404_on_missing(self, client: TestClient) -> None:
-        resp = client.post("/ingest/file", json={"file_path": "/no/such/file.md"})
+    def test_ingest_file_404_on_missing(self, client: TestClient, tmp_path: Path) -> None:
+        resp = client.post("/ingest/file", json={"file_path": str(tmp_path / "ghost.md")})
         assert resp.status_code == 404
+
+    def test_ingest_file_403_outside_vault(self, client: TestClient) -> None:
+        resp = client.post("/ingest/file", json={"file_path": "/no/such/file.md"})
+        assert resp.status_code == 403
 
     def test_ingest_file_422_on_non_md(self, client: TestClient, tmp_path: Path) -> None:
         txt = tmp_path / "readme.txt"

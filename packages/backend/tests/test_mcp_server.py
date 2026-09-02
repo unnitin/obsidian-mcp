@@ -133,6 +133,15 @@ class TestMcpGetNoteContent:
             await mcp.call_tool("get_note_content", {"file_path": str(tmp_path / "ghost.md")})  # type: ignore[attr-defined]
         store.close()
 
+    @pytest.mark.asyncio
+    async def test_path_outside_vault_rejected(self, tmp_path: Path) -> None:
+        from fastmcp.exceptions import ToolError
+
+        mcp, store = _setup(tmp_path)
+        with pytest.raises(ToolError, match="outside the vault"):
+            await mcp.call_tool("get_note_content", {"file_path": "/etc/hosts"})  # type: ignore[attr-defined]
+        store.close()
+
 
 class TestMcpIndexUrl:
     @pytest.mark.asyncio
@@ -234,9 +243,37 @@ class TestMcpRemoveFromIndex:
     @pytest.mark.asyncio
     async def test_removes_existing_document(self, tmp_path: Path) -> None:
         mcp, store = _setup(tmp_path)
-        _insert_chunk(store)
+        _insert_chunk(store, file_path=str((tmp_path / "a.md").resolve()))
         result = await _call(mcp, "remove_from_index", file_path="a.md")
         assert result["chunks_removed"] == 1  # type: ignore[index]
+        store.close()
+
+    @pytest.mark.asyncio
+    async def test_removes_web_document_by_url(self, tmp_path: Path) -> None:
+        mcp, store = _setup(tmp_path)
+        url = "https://example.com/post"
+        chunk = Chunk(
+            id=ChunkId.generate(url, 0),
+            source_type=SourceType.WEB,
+            file_path=url,
+            url=url,
+            content="Web page body.",
+            mtime=1_700_000_000.0,
+            chunk_index=0,
+            metadata={},
+        )
+        store.upsert_chunks([chunk], _fake_encode(["Web page body."]))
+        result = await _call(mcp, "remove_from_index", file_path=url)
+        assert result["chunks_removed"] == 1  # type: ignore[index]
+        store.close()
+
+    @pytest.mark.asyncio
+    async def test_path_outside_vault_rejected(self, tmp_path: Path) -> None:
+        from fastmcp.exceptions import ToolError
+
+        mcp, store = _setup(tmp_path)
+        with pytest.raises(ToolError, match="outside the vault"):
+            await _call(mcp, "remove_from_index", file_path="/etc/hosts")
         store.close()
 
     @pytest.mark.asyncio

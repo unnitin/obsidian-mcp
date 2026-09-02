@@ -76,8 +76,20 @@ class TestIngestUrlRoute:
 class TestIngestPdfRoute:
     def test_nonexistent_file_returns_404(self, tmp_path: Path) -> None:
         client, store = _make_client(tmp_path)
-        resp = client.post("/ingest/pdf", json={"file_path": "/nonexistent/file.pdf"})
+        resp = client.post("/ingest/pdf", json={"file_path": str(tmp_path / "ghost.pdf")})
         assert resp.status_code == 404
+        store.close()
+
+    def test_path_outside_vault_returns_403(self, tmp_path: Path) -> None:
+        client, store = _make_client(tmp_path)
+        resp = client.post("/ingest/pdf", json={"file_path": "/etc/passwd.pdf"})
+        assert resp.status_code == 403
+        store.close()
+
+    def test_traversal_out_of_vault_returns_403(self, tmp_path: Path) -> None:
+        client, store = _make_client(tmp_path)
+        resp = client.post("/ingest/pdf", json={"file_path": "../../../../etc/hosts.pdf"})
+        assert resp.status_code == 403
         store.close()
 
     def test_non_pdf_extension_returns_422(self, tmp_path: Path) -> None:
@@ -111,8 +123,26 @@ class TestIngestPdfRoute:
 class TestIngestFileRoute:
     def test_nonexistent_file_returns_404(self, tmp_path: Path) -> None:
         client, store = _make_client(tmp_path)
-        resp = client.post("/ingest/file", json={"file_path": "/nonexistent/note.md"})
+        resp = client.post("/ingest/file", json={"file_path": str(tmp_path / "ghost.md")})
         assert resp.status_code == 404
+        store.close()
+
+    def test_path_outside_vault_returns_403(self, tmp_path: Path) -> None:
+        client, store = _make_client(tmp_path)
+        resp = client.post("/ingest/file", json={"file_path": "/etc/hosts.md"})
+        assert resp.status_code == 403
+        store.close()
+
+    def test_symlink_escape_returns_403(self, tmp_path: Path) -> None:
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        outside = tmp_path / "secret.md"
+        outside.write_text("secret")
+        link = vault / "link.md"
+        link.symlink_to(outside)
+        client, store = _make_client(vault)
+        resp = client.post("/ingest/file", json={"file_path": str(link)})
+        assert resp.status_code == 403
         store.close()
 
     def test_non_md_extension_returns_422(self, tmp_path: Path) -> None:
@@ -148,11 +178,12 @@ class TestRemoveDocumentRoute:
         from obsidian_search.models import Chunk, ChunkId, SourceType
 
         client, store = _make_client(tmp_path)
-        # Insert a chunk first
+        # The pipeline keys chunks by absolute path, so the index does too.
+        note = str((tmp_path / "note.md").resolve())
         chunk = Chunk(
-            id=ChunkId.generate("note.md", 0),
+            id=ChunkId.generate(note, 0),
             source_type=SourceType.MARKDOWN,
-            file_path="note.md",
+            file_path=note,
             content="Hello world content here.",
             mtime=1_700_000_000.0,
             chunk_index=0,
@@ -161,9 +192,38 @@ class TestRemoveDocumentRoute:
         vec = _fake_encode(["Hello world content here."])
         store.upsert_chunks([chunk], vec)
 
+        # A vault-relative path resolves to the same key.
         resp = client.request("DELETE", "/index/document", json={"file_path": "note.md"})
         assert resp.status_code == 200
         assert resp.json()["chunks_removed"] == 1
+        store.close()
+
+    def test_remove_web_document_by_url(self, tmp_path: Path) -> None:
+        from obsidian_search.models import Chunk, ChunkId, SourceType
+
+        client, store = _make_client(tmp_path)
+        url = "https://example.com/post"
+        chunk = Chunk(
+            id=ChunkId.generate(url, 0),
+            source_type=SourceType.WEB,
+            file_path=url,
+            url=url,
+            content="Web page body text.",
+            mtime=1_700_000_000.0,
+            chunk_index=0,
+            metadata={},
+        )
+        store.upsert_chunks([chunk], _fake_encode(["Web page body text."]))
+
+        resp = client.request("DELETE", "/index/document", json={"file_path": url})
+        assert resp.status_code == 200
+        assert resp.json()["chunks_removed"] == 1
+        store.close()
+
+    def test_remove_path_outside_vault_returns_403(self, tmp_path: Path) -> None:
+        client, store = _make_client(tmp_path)
+        resp = client.request("DELETE", "/index/document", json={"file_path": "/etc/hosts"})
+        assert resp.status_code == 403
         store.close()
 
     def test_remove_nonexistent_document_returns_zero(self, tmp_path: Path) -> None:
