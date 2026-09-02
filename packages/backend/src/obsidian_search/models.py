@@ -3,7 +3,7 @@
 import hashlib
 from datetime import datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -75,6 +75,15 @@ class IndexedFile(BaseModel):
     chunk_count: int
     last_indexed: datetime
     url: str | None = None
+
+
+class WriteResult(BaseModel):
+    """Result of a vault write operation."""
+
+    file_path: str
+    action: Literal["created", "appended"]
+    bytes_written: int = Field(ge=0)
+    chunks_indexed: int = Field(ge=0)
 
 
 class IngestResult(BaseModel):
