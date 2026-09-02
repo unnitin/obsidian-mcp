@@ -56,6 +56,10 @@ class VectorStore:
                     conn.enable_load_extension(False)
                     conn.execute("PRAGMA journal_mode=WAL")
                     conn.execute("PRAGMA synchronous=NORMAL")
+                    # The API and MCP processes can both hold the DB open, so a
+                    # writer must wait for the other's transaction rather than
+                    # failing immediately with "database is locked".
+                    conn.execute("PRAGMA busy_timeout=10000")
                     self._conn = conn
         return self._conn
 

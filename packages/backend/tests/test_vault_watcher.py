@@ -6,6 +6,7 @@ import time
 import unittest.mock as mock
 from pathlib import Path
 
+import pytest
 from obsidian_search.config import Settings
 from obsidian_search.ingestion.pipeline import IndexingPipeline
 from obsidian_search.watcher.vault_watcher import VaultWatcher
@@ -184,3 +185,85 @@ class TestWatcherStop:
             time.sleep(0.1)
 
         assert dispatched == []  # timer was cancelled
+
+
+class TestWatcherOwnership:
+    """Only one process per vault may reconcile and watch."""
+
+    def _watcher(self, tmp_path: Path) -> VaultWatcher:
+        settings = Settings(vault_path=str(tmp_path))
+        pipeline = mock.MagicMock()
+        pipeline.store.list_files.return_value = []
+        return VaultWatcher(settings=settings, pipeline=pipeline)
+
+    def test_first_watcher_takes_ownership(self, tmp_path: Path) -> None:
+        w = self._watcher(tmp_path)
+        with mock.patch.object(w, "_start_observer"):
+            w.start()
+        assert w.is_running
+        w.stop()
+
+    def test_second_watcher_on_same_vault_stands_down(self, tmp_path: Path) -> None:
+        first = self._watcher(tmp_path)
+        second = self._watcher(tmp_path)
+        with mock.patch.object(first, "_start_observer"):
+            first.start()
+        with mock.patch.object(second, "_start_observer") as observer:
+            second.start()
+
+        assert first.is_running
+        assert not second.is_running
+        observer.assert_not_called()
+        # The stood-down watcher must not have re-walked the vault either.
+        second.pipeline.index_file.assert_not_called()  # type: ignore[attr-defined]
+        first.stop()
+        second.stop()
+
+    def test_ownership_is_released_on_stop(self, tmp_path: Path) -> None:
+        first = self._watcher(tmp_path)
+        with mock.patch.object(first, "_start_observer"):
+            first.start()
+        first.stop()
+
+        second = self._watcher(tmp_path)
+        with mock.patch.object(second, "_start_observer"):
+            second.start()
+        assert second.is_running
+        second.stop()
+
+    def test_different_vaults_do_not_contend(self, tmp_path: Path) -> None:
+        vault_a = tmp_path / "a"
+        vault_b = tmp_path / "b"
+        vault_a.mkdir()
+        vault_b.mkdir()
+        a = self._watcher(vault_a)
+        b = self._watcher(vault_b)
+        with mock.patch.object(a, "_start_observer"), mock.patch.object(b, "_start_observer"):
+            a.start()
+            b.start()
+        assert a.is_running
+        assert b.is_running
+        a.stop()
+        b.stop()
+
+    def test_lock_lives_outside_the_vault(self, tmp_path: Path) -> None:
+        from obsidian_search.watcher.vault_watcher import _lock_path
+
+        lock = _lock_path(tmp_path)
+        assert not lock.is_relative_to(tmp_path)
+
+    def test_ownership_released_if_startup_fails(self, tmp_path: Path) -> None:
+        first = self._watcher(tmp_path)
+        with (
+            mock.patch.object(first, "_start_observer", side_effect=RuntimeError("boom")),
+            pytest.raises(RuntimeError, match="boom"),
+        ):
+            first.start()
+        assert not first.is_running
+
+        # The failed attempt must not leave the vault locked.
+        second = self._watcher(tmp_path)
+        with mock.patch.object(second, "_start_observer"):
+            second.start()
+        assert second.is_running
+        second.stop()
