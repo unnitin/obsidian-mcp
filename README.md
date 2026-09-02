@@ -386,6 +386,7 @@ All settings can be set via environment variables or a `.env` file in the projec
 | `OBSIDIAN_SEARCH_PORT` | `51234` | FastAPI server port |
 | `OBSIDIAN_SEARCH_HOST` | `127.0.0.1` | FastAPI server host |
 | `OBSIDIAN_SEARCH_EMBEDDING_MODEL` | `nomic-ai/nomic-embed-text-v1.5` | HuggingFace model ID |
+| `OBSIDIAN_SEARCH_DEVICE` | `cpu` | Torch device for the embedder and reranker. MPS costs ~1 GB of address space per model |
 | `OBSIDIAN_SEARCH_DEFAULT_TOP_K` | `10` | Default number of search results |
 | `OBSIDIAN_SEARCH_RERANK_CANDIDATES` | `50` | Candidates passed to CrossEncoder |
 | `OBSIDIAN_SEARCH_CHUNK_MAX_TOKENS` | `512` | Maximum tokens per chunk |

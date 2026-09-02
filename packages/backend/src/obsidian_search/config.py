@@ -35,6 +35,13 @@ class Settings(BaseSettings):
     embedding_model: str = "BAAI/bge-small-en-v1.5"
     embedding_batch_size: int = 32
 
+    # Torch device for both the embedder and the reranker. CPU is the default
+    # deliberately: bge-small is fast enough on CPU for single-query work, and
+    # MPS permanently maps model weights into both CPU and GPU address space on
+    # Apple Silicon, costing ~1 GB per model. Override only if you have a GPU
+    # worth the memory.
+    device: str = "cpu"
+
     # Reranking — disabled by default; ANN scores from nomic-embed-text are
     # more discriminative than cross-encoder logits for personal notes.
     # Set OBSIDIAN_SEARCH_RERANKER_ENABLED=true to enable.

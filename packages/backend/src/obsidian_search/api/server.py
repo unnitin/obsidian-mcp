@@ -80,7 +80,11 @@ def create_app(
         allow_headers=["*"],
     )
 
-    reranker = Reranker(model_name=settings.reranker_model) if settings.reranker_enabled else None
+    reranker = (
+        Reranker(model_name=settings.reranker_model, device=settings.device)
+        if settings.reranker_enabled
+        else None
+    )
     searcher = Searcher(settings=settings, store=store, embedder=embedder, reranker=reranker)
 
     # ── Core routes ───────────────────────────────────────────────────────────
@@ -124,7 +128,7 @@ def main() -> None:
     settings = Settings()  # type: ignore[call-arg]  # vault_path read from env
     settings.db_dir.mkdir(parents=True, exist_ok=True)
 
-    embedder = Embedder(model_name=settings.embedding_model)
+    embedder = Embedder(model_name=settings.embedding_model, device=settings.device)
     embedder._load()
 
     store = VectorStore(settings.db_path)
