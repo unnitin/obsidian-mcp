@@ -1,6 +1,6 @@
 # obsidian-mcp
 
-Semantic search for your Obsidian vault. Index notes, PDFs, and web pages — then search them from inside Obsidian or through Claude and other LLMs via the Model Context Protocol.
+Semantic search for your Obsidian vault. Index notes, PDFs, and web pages — then search, read, and write them from Claude and other LLMs via the Model Context Protocol.
 
 ---
 
@@ -9,8 +9,7 @@ Semantic search for your Obsidian vault. Index notes, PDFs, and web pages — th
 | | |
 |---|---|
 | **Semantic search** | Find notes by meaning, not just keywords. Ask "what did I write about attention mechanisms?" and get the right notes back. |
-| **Obsidian plugin** | `Cmd+Shift+F` opens an in-app search modal. Results show the matching section, not just the file. |
-| **MCP server** | Claude (and any MCP-compatible LLM) can search your vault, read notes, and index new URLs on your behalf. |
+| **MCP server** | Claude (and any MCP-compatible LLM) can search your vault, read notes, create and append notes, and index new URLs on your behalf. |
 | **iCloud sync** | The vector database is a single SQLite file stored inside your vault — it syncs automatically across all your Macs. |
 | **Fully local** | Embeddings run on-device via Apple MPS (Apple Silicon). No API keys, no data leaving your machine. |
 | **Auto-reindex** | A file watcher detects changes as you write and incrementally updates the index in the background. |
@@ -22,20 +21,22 @@ Semantic search for your Obsidian vault. Index notes, PDFs, and web pages — th
 ```
 ┌─────────────────────────────────────────────────────────┐
 │                 Obsidian Vault (iCloud)                  │
-│  ├── Notes/*.md                                         │
-│  ├── .obsidian-search/semantic-search.db  ← vectors     │
-│  └── .obsidian/plugins/obsidian-semantic-search/         │
+│  ├── Notes/*.md                                          │
+│  └── .obsidian-search/semantic-search.db  ← vectors      │
 └─────────────────────────────────────────────────────────┘
-          ▲ reads / writes          ▲ plugin installed here
-          │                         │
-┌─────────┴─────────────────────────┴───────────────────┐
-│             Python Backend  (local process)             │
-│  FastAPI  :51234  ◄─── Obsidian plugin (HTTP)          │
-│  FastMCP  stdio   ◄─── Claude Desktop / LLMs           │
-│                                                        │
-│  nomic-embed-text-v1.5  (sentence-transformers + MPS)  │
-│  CrossEncoder reranker  (ms-marco-MiniLM-L-6-v2)       │
-└────────────────────────────────────────────────────────┘
+                    ▲ reads / writes
+                    │
+┌───────────────────┴─────────────────────────────────────┐
+│             Python Backend  (local process)              │
+│  FastMCP  stdio   ◄─── Claude Desktop / LLMs             │
+│  FastAPI  :51234  ◄─── local scripts (optional)          │
+│                                                          │
+│  bge-small-en-v1.5  (sentence-transformers, CPU)         │
+│  file watcher — incremental reindex on save              │
+└──────────────────────────────────────────────────────────┘
+
+Obsidian edits notes on disk; the watcher picks the changes up. Nothing is
+installed into Obsidian itself.
 ```
 
 See [`docs/userflows.md`](docs/userflows.md) for detailed Mermaid diagrams of every interaction path.
@@ -73,27 +74,21 @@ See [`docs/userflows.md`](docs/userflows.md) for detailed Mermaid diagrams of ev
 ```
 obsidian-mcp/
 ├── packages/
-│   ├── backend/                  # Python — FastAPI + FastMCP server
-│   │   └── src/obsidian_search/
-│   │       ├── config.py         # pydantic-settings (VAULT_PATH, port, …)
-│   │       ├── models.py         # Chunk, SearchResult, IndexStatus, …
-│   │       ├── ingestion/        # chunker_markdown, chunker_pdf, chunker_web
-│   │       ├── embedding/        # nomic-embed-text-v1.5 singleton
-│   │       ├── store/            # sqlite-vec CRUD + ANN search
-│   │       ├── search/           # searcher + CrossEncoder reranker
-│   │       ├── watcher/          # watchdog FSEventsObserver
-│   │       ├── api/              # FastAPI routes (/search, /ingest/*, /status)
-│   │       └── mcp/              # FastMCP tools for Claude
-│   └── obsidian-plugin/          # TypeScript — Obsidian plugin
-│       └── src/
-│           ├── main.ts           # Plugin entry, commands, file save hook
-│           ├── settings.ts       # Settings tab (server URL, top-k, …)
-│           ├── api-client.ts     # Typed fetch() wrapper
-│           ├── search-modal.ts   # SuggestModal with debounced search
-│           └── types.ts          # Shared interfaces
+│   └── backend/                  # Python — FastMCP + FastAPI server
+│       └── src/obsidian_search/
+│           ├── config.py         # pydantic-settings (VAULT_PATH, port, …)
+│           ├── models.py         # Chunk, SearchResult, WriteResult, …
+│           ├── ingestion/        # chunker_markdown, chunker_pdf, chunker_web
+│           ├── embedding/        # embedding model singleton
+│           ├── store/            # sqlite-vec CRUD + ANN search
+│           ├── search/           # searcher + optional cross-encoder reranker
+│           ├── vault/            # note writes (create / append)
+│           ├── watcher/          # watchdog FSEventsObserver
+│           ├── api/              # FastAPI routes (/search, /ingest/*, /status)
+│           └── mcp/              # FastMCP tools for Claude
 ├── docs/
 │   ├── userflows.md              # Mermaid diagrams for all user flows
-│   └── branch-protection.md     # GitHub branch protection setup guide
+│   └── branch-protection.md      # GitHub branch protection setup guide
 ├── .github/workflows/ci.yml      # Lint + typecheck + tests gate
 └── PLAN.md                       # Architecture decisions and implementation plan
 ```
@@ -102,10 +97,9 @@ obsidian-mcp/
 
 ## Prerequisites
 
-- macOS (Apple Silicon recommended for MPS acceleration)
+- macOS (Apple Silicon recommended)
 - [uv](https://docs.astral.sh/uv/) — Python package manager
-- Node.js ≥ 18 — for building the Obsidian plugin
-- Obsidian desktop app
+- Obsidian desktop app (to edit the vault; no plugin required)
 
 ---
 
@@ -151,18 +145,11 @@ The backend is a **local Python process** that runs on the same Mac as your vaul
 ```
 
 This starts:
-- **FastAPI server** on `http://127.0.0.1:51234` (used by the Obsidian plugin)
+- **FastAPI server** on `http://127.0.0.1:51234` for local scripts (optional — the MCP server runs standalone)
 - **File watcher** monitoring your vault for changes and updating the index incrementally
 
-### 4. Install the Obsidian plugin
-
-```bash
-./scripts/build-plugin.sh
-```
-
-Then in Obsidian: **Settings → Community plugins → Enable** `Semantic Search`.
-
-Set the server URL to `http://127.0.0.1:51234` (default) and click **Test connection**.
+> Run either the API server or the MCP server, not both against the same vault —
+> each starts its own file watcher and writes to the same index.
 
 ### Running on a Mac mini (always-on server)
 
@@ -270,15 +257,15 @@ On your other Mac, use the Mac mini's local IP instead of `127.0.0.1`:
 # On the Mac mini:
 ipconfig getifaddr en0
 
-# On your other Mac, set the plugin server URL to:
+# Reach it from your other Mac at:
 # http://192.168.x.x:51234
 ```
 
-Point the Obsidian plugin and Claude Desktop config to `http://192.168.x.x:51234` instead of `127.0.0.1`.
+Point local clients at `http://192.168.x.x:51234` instead of `127.0.0.1`.
 
 ---
 
-### 5. Connect Claude Desktop (optional)
+### 4. Connect Claude Desktop
 
 Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
@@ -306,16 +293,6 @@ Restart Claude Desktop. You'll see the 🔌 icon indicating the MCP server is co
 
 ## Usage
 
-### Obsidian plugin
-
-| Action | How |
-|--------|-----|
-| Search notes | `Cmd+Shift+F` → type a natural language query |
-| Index a URL | `Cmd+P` → "Index URL from clipboard" |
-| Index a PDF | `Cmd+P` → "Index PDF file" |
-| Re-index vault | Settings tab → "Re-index entire vault" |
-| View index stats | Settings tab → shows total chunks and last indexed time |
-
 ### Claude
 
 Once connected, Claude can:
@@ -324,6 +301,8 @@ Once connected, Claude can:
 "What did I write about the CAP theorem?"
 "Summarise my notes on async Rust"
 "Index this article for me: https://..."
+"Start a note in Projects/ for the migration plan"
+"Add today's standup notes to my weekly log"
 "How many documents are in my vault index?"
 ```
 
@@ -333,11 +312,17 @@ Available MCP tools:
 |------|-------------|
 | `search_notes` | Semantic search with optional type/tag filters |
 | `get_note_content` | Read a full note by vault-relative path |
+| `create_note` | Create a new markdown note and index it (never overwrites) |
+| `append_to_note` | Append to an existing note and reindex it |
 | `index_url` | Fetch, chunk, and index a URL |
-| `index_pdf` | Index a PDF at an absolute path |
+| `index_pdf` | Index a PDF inside the vault |
+| `index_note` | Force a re-index of a single markdown note |
 | `get_index_status` | Total chunks, documents, last indexed time |
 | `list_indexed_files` | All indexed documents with chunk counts |
-| `remove_from_index` | Remove a document and all its chunks |
+| `remove_from_index` | Remove a document from the index (leaves the file on disk) |
+
+Every path argument is confined to the vault; writes are additive only — no
+tool can overwrite, move, or delete a note.
 
 ---
 
@@ -385,7 +370,7 @@ All settings can be set via environment variables or a `.env` file in the projec
 | `VAULT_PATH` | *(required)* | Absolute path to your Obsidian vault |
 | `OBSIDIAN_SEARCH_PORT` | `51234` | FastAPI server port |
 | `OBSIDIAN_SEARCH_HOST` | `127.0.0.1` | FastAPI server host |
-| `OBSIDIAN_SEARCH_EMBEDDING_MODEL` | `nomic-ai/nomic-embed-text-v1.5` | HuggingFace model ID |
+| `OBSIDIAN_SEARCH_EMBEDDING_MODEL` | `BAAI/bge-small-en-v1.5` | HuggingFace model ID |
 | `OBSIDIAN_SEARCH_DEFAULT_TOP_K` | `10` | Default number of search results |
 | `OBSIDIAN_SEARCH_RERANK_CANDIDATES` | `50` | Candidates passed to CrossEncoder |
 | `OBSIDIAN_SEARCH_CHUNK_MAX_TOKENS` | `512` | Maximum tokens per chunk |
@@ -408,5 +393,4 @@ All settings can be set via environment variables or a `.env` file in the projec
 | API server | `fastapi` + `uvicorn` |
 | MCP server | `fastmcp` (stdio transport) |
 | File watcher | `watchdog` (FSEvents on macOS) |
-| Plugin | TypeScript + Obsidian API, bundled with `esbuild` |
 | Package manager | `uv` |

@@ -3,8 +3,7 @@
 ## Requirements
 
 - Python 3.12+ and [uv](https://astral.sh/uv)
-- Node.js 18+ (plugin build only)
-- macOS (Apple Silicon recommended for GPU embedding)
+- macOS (Apple Silicon recommended)
 
 ---
 
@@ -29,19 +28,7 @@ listens at `http://127.0.0.1:51234` and automatically indexes your vault.
 
 ---
 
-## 3. Install the Obsidian plugin
-
-```bash
-bash scripts/build-plugin.sh "/path/to/your/vault"
-```
-
-Then in Obsidian: **Settings → Community Plugins → Semantic Search → Enable**
-
-Press `Cmd+Shift+F` to search.
-
----
-
-## 4. Connect to Claude (optional)
+## 3. Connect to Claude
 
 Add this to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
@@ -92,9 +79,9 @@ curl http://127.0.0.1:51234/status
   │    • FastAPI  :51234           │
   │    • MCP server (stdio)        │
   └────────────────────────────────┘
-         ▲                   ▲
-         │ plugin HTTP        │ Claude Desktop (MCP)
-    Obsidian on Mac mini   Claude on Mac mini or other Mac
+                             ▲
+                             │ Claude Desktop (MCP)
+                    Claude on Mac mini or other Mac
 ```
 
 The **Python backend runs on the Mac mini** — not in iCloud, not on Obsidian's servers. It reads your vault from the local iCloud Drive folder (which macOS syncs for you), builds a local vector index, and exposes a search API. Everything stays on your own hardware.
@@ -221,11 +208,6 @@ ipconfig getifaddr en1    # Ethernet (use whichever shows an IP)
 Example result: `192.168.1.42`
 
 #### 7. Configure clients on other Macs
-
-**Obsidian plugin** — In Settings → Semantic Search, set Server URL to:
-```
-http://192.168.1.42:51234
-```
 
 **Claude Desktop** — In `~/Library/Application Support/Claude/claude_desktop_config.json`:
 ```json

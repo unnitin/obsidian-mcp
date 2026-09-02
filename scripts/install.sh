@@ -22,17 +22,6 @@ cd "$REPO_ROOT/packages/backend"
 uv sync --all-extras --frozen
 echo "    Done."
 
-# ── Node / npm ────────────────────────────────────────────────────────────────
-cd "$REPO_ROOT/packages/obsidian-plugin"
-if command -v npm &>/dev/null; then
-  echo "==> Installing Node dependencies for Obsidian plugin..."
-  npm install
-  echo "    Done."
-else
-  echo "    Note: npm not found — skipping Obsidian plugin dependencies."
-  echo "    Install Node.js from https://nodejs.org/ to build the plugin."
-fi
-
 # ── Pre-commit ────────────────────────────────────────────────────────────────
 cd "$REPO_ROOT"
 if uv run pre-commit --version &>/dev/null; then
@@ -45,5 +34,4 @@ echo ""
 echo "✓ Installation complete."
 echo ""
 echo "  Start backend:     bash scripts/start-backend.sh"
-echo "  Build plugin:      bash scripts/build-plugin.sh /path/to/vault"
 echo "  Run tests:         cd packages/backend && uv run pytest"

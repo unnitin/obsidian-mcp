@@ -40,49 +40,11 @@ jobs:
           name: python-wheel
           path: dist/*.whl
 
-  # ─── Build Obsidian plugin ────────────────────────────────────────────────
-  build-plugin:
-    name: Build Obsidian plugin
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          cache: "npm"
-          cache-dependency-path: packages/obsidian-plugin/package-lock.json
-
-      - name: Install dependencies
-        working-directory: packages/obsidian-plugin
-        run: npm ci
-
-      - name: Build plugin
-        working-directory: packages/obsidian-plugin
-        run: npm run build
-
-      - name: Package plugin zip
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          ZIP="obsidian-semantic-search-${VERSION}.zip"
-          zip -j "$ZIP" \
-            packages/obsidian-plugin/main.js \
-            packages/obsidian-plugin/manifest.json \
-            packages/obsidian-plugin/styles.css
-          echo "PLUGIN_ZIP=$ZIP" >> "$GITHUB_ENV"
-
-      - name: Upload plugin artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: obsidian-plugin
-          path: "*.zip"
-
   # ─── Create GitHub Release ────────────────────────────────────────────────
   release:
     name: Create GitHub Release
     runs-on: ubuntu-latest
-    needs: [build-backend, build-plugin]
+    needs: [build-backend]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -124,7 +86,8 @@ jobs:
             VAULT_PATH=/path/to/vault obsidian-search-api
             ```
 
-            **Obsidian plugin** — unzip `obsidian-semantic-search-*.zip` into your vault's `.obsidian/plugins/` directory.
+            **Claude Desktop (MCP)** — see `docs/mcp-setup.md` for the
+            `claude_desktop_config.json` entry that runs `obsidian-search-mcp`.
           files: release-assets/*
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
