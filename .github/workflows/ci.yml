@@ -3,8 +3,11 @@ name: CI
 on:
   push:
     branches: [main]       # post-merge verification only
+  # Every pull request, whatever it targets. The branch filter used to be
+  # [main], so a PR stacked on another PR's branch got no checks at all — the
+  # gate silently did not apply to exactly the changes least likely to have
+  # been run anywhere else.
   pull_request:
-    branches: [main]       # pre-merge gate (the one that blocks bad PRs)
 
 # Cancel in-progress runs for the same branch/PR to save runner minutes.
 concurrency:
