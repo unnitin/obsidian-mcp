@@ -74,17 +74,15 @@ curl -s -X POST http://127.0.0.1:51234/search \
 
 The vector database is stored at `your-vault/.obsidian-search/semantic-search.db`.
 
-⚠️ The store currently opens the DB with `journal_mode=WAL`, which creates
-`-wal` and `-shm` sidecar files next to it. iCloud can upload the `.db` and its
-`-wal` at different moments, so a vault synced mid-write can materialise a torn
-database on another Mac. Until this is changed, treat the index as rebuildable:
-if search behaves oddly after a sync, delete `.obsidian-search/` and let the
-backend reindex.
+It uses `journal_mode=DELETE`, not WAL, so the journal is removed at the end of
+every transaction and there is exactly one file to sync at rest — no `-wal` or
+`-shm` sidecars that iCloud could upload out of step with the `.db`.
 
-**Recommendation:** Do not run the backend simultaneously on two Macs sharing the
-same iCloud vault.  Each Mac should run its own backend instance pointing at
-the same vault path (they will each re-embed on startup reconciliation if the
-mtime has changed).
+**Recommendation:** Each Mac should run its own backend instance pointing at its
+own local copy of the vault (they will each re-embed on startup reconciliation
+if the mtime has changed). On a single machine it is safe to have both the API
+and the MCP server running: they take a per-vault lock, so only one of them
+watches and reindexes.
 
 ---
 
