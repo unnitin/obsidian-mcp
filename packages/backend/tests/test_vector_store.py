@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 
 import numpy as np
@@ -599,4 +600,125 @@ class TestJournalMode:
         rows = store._conn_().execute("SELECT id FROM chunks ORDER BY id").fetchall()
         assert [r[0] for r in rows] == ["fresh", "legacy"]
         assert sorted(p.name for p in tmp_path.iterdir()) == ["legacy.db"]
+        store.close()
+
+
+class TestLegacyIndexGuard:
+    """An index with no recorded profile must not be waved through.
+
+    Profile tracking arrived after the per-model prefix fix, so the indexes most
+    likely to hold incompatible vectors are exactly the ones carrying no
+    profile to compare against.
+    """
+
+    NOMIC = "search_document: "
+    NOMIC_Q = "search_query: "
+
+    def _legacy_index(self, tmp_path: Path, *, populated: bool = True) -> Path:
+        """An index as an older version left it: dims recorded, profile absent."""
+        db = tmp_path / "legacy.db"
+        store = VectorStore(db)
+        store.initialize(dims=DIMS)  # no profile — the pre-tracking call
+        if populated:
+            store.upsert_chunks(
+                [
+                    Chunk(
+                        id="c1",
+                        source_type=SourceType.MARKDOWN,
+                        file_path="/vault/a.md",
+                        content="body text",
+                        mtime=1.0,
+                        chunk_index=0,
+                    )
+                ],
+                np.ones((1, DIMS), dtype=np.float32),
+            )
+        store.close()
+        assert (
+            sqlite3.connect(db)
+            .execute("SELECT value FROM metadata WHERE key='embedding_profile'")
+            .fetchone()
+            is None
+        )
+        return db
+
+    def test_incompatible_legacy_index_is_refused(self, tmp_path: Path) -> None:
+        """The regression: this silently adopted the new profile and served stale vectors."""
+        db = self._legacy_index(tmp_path)
+        store = VectorStore(db)
+        with pytest.raises(RuntimeError, match="records no profile"):
+            store.initialize(
+                dims=DIMS,
+                profile="m|doc=|query=Represent this sentence: ",
+                legacy_profile=f"m|doc={self.NOMIC}|query={self.NOMIC_Q}",
+            )
+        store.close()
+
+    def test_compatible_legacy_index_is_accepted(self, tmp_path: Path) -> None:
+        """Nomic all along — the stored vectors really do match, so no rebuild."""
+        db = self._legacy_index(tmp_path)
+        profile = f"m|doc={self.NOMIC}|query={self.NOMIC_Q}"
+        store = VectorStore(db)
+        store.initialize(dims=DIMS, profile=profile, legacy_profile=profile)
+        assert store.stats()["total_chunks"] == 1
+        store.close()
+
+    def test_accepted_legacy_index_records_the_profile(self, tmp_path: Path) -> None:
+        db = self._legacy_index(tmp_path)
+        profile = f"m|doc={self.NOMIC}|query={self.NOMIC_Q}"
+        store = VectorStore(db)
+        store.initialize(dims=DIMS, profile=profile, legacy_profile=profile)
+        row = (
+            store._conn_()
+            .execute("SELECT value FROM metadata WHERE key='embedding_profile'")
+            .fetchone()
+        )
+        assert row[0] == profile
+        store.close()
+
+    def test_empty_legacy_index_is_accepted(self, tmp_path: Path) -> None:
+        """No chunks means nothing to invalidate, whatever the prefixes were."""
+        db = self._legacy_index(tmp_path, populated=False)
+        store = VectorStore(db)
+        store.initialize(
+            dims=DIMS,
+            profile="m|doc=|query=new: ",
+            legacy_profile=f"m|doc={self.NOMIC}|query={self.NOMIC_Q}",
+        )
+        store.close()
+
+    def test_recorded_profile_takes_precedence_over_the_legacy_guess(self, tmp_path: Path) -> None:
+        """Once a profile is recorded it is the truth; the fallback must not override."""
+        db = tmp_path / "tracked.db"
+        store = VectorStore(db)
+        store.initialize(dims=DIMS, profile="m|doc=|query=a: ")
+        store.upsert_chunks(
+            [
+                Chunk(
+                    id="c1",
+                    source_type=SourceType.MARKDOWN,
+                    file_path="/vault/a.md",
+                    content="body",
+                    mtime=1.0,
+                    chunk_index=0,
+                )
+            ],
+            np.ones((1, DIMS), dtype=np.float32),
+        )
+        store.close()
+
+        store = VectorStore(db)
+        with pytest.raises(RuntimeError, match="the index was built with"):
+            store.initialize(
+                dims=DIMS, profile="m|doc=|query=b: ", legacy_profile="m|doc=|query=b: "
+            )
+        store.close()
+
+    def test_omitting_legacy_profile_keeps_the_old_permissive_behaviour(
+        self, tmp_path: Path
+    ) -> None:
+        """Callers that do not track it (tests, scripts) are unaffected."""
+        db = self._legacy_index(tmp_path)
+        store = VectorStore(db)
+        store.initialize(dims=DIMS, profile="m|doc=|query=anything: ")
         store.close()
