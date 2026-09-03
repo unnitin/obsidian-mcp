@@ -282,3 +282,104 @@ class TestMcpRemoveFromIndex:
         result = await _call(mcp, "remove_from_index", file_path="ghost.md")
         assert result["chunks_removed"] == 0  # type: ignore[index]
         store.close()
+
+
+class TestMcpCreateNote:
+    @pytest.mark.asyncio
+    async def test_creates_and_indexes_note(self, tmp_path: Path) -> None:
+        mcp, store = _setup(tmp_path)
+        result = await _call(
+            mcp, "create_note", file_path="ideas.md", content="# Ideas\n\nBody text here."
+        )
+        assert result["action"] == "created"  # type: ignore[index]
+        assert (tmp_path / "ideas.md").read_text().startswith("# Ideas")
+        assert result["chunks_indexed"] > 0  # type: ignore[index]
+        store.close()
+
+    @pytest.mark.asyncio
+    async def test_new_note_is_searchable(self, tmp_path: Path) -> None:
+        mcp, store = _setup(tmp_path)
+        await _call(
+            mcp, "create_note", file_path="ideas.md", content="# Ideas\n\nQuantum entanglement."
+        )
+        results = await _call(mcp, "search_notes", query="entanglement")
+        assert len(results) > 0  # type: ignore[arg-type]
+        store.close()
+
+    @pytest.mark.asyncio
+    async def test_refuses_to_overwrite(self, tmp_path: Path) -> None:
+        from fastmcp.exceptions import ToolError
+
+        (tmp_path / "note.md").write_text("original")
+        mcp, store = _setup(tmp_path)
+        with pytest.raises(ToolError, match="already exists"):
+            await _call(mcp, "create_note", file_path="note.md", content="replacement")
+        assert (tmp_path / "note.md").read_text() == "original"
+        store.close()
+
+    @pytest.mark.asyncio
+    async def test_rejects_path_outside_vault(self, tmp_path: Path) -> None:
+        from fastmcp.exceptions import ToolError
+
+        mcp, store = _setup(tmp_path)
+        with pytest.raises(ToolError, match="outside the vault"):
+            await _call(mcp, "create_note", file_path="/tmp/escape.md", content="x")
+        store.close()
+
+
+class TestMcpAppendToNote:
+    @pytest.mark.asyncio
+    async def test_appends_and_reindexes(self, tmp_path: Path) -> None:
+        (tmp_path / "log.md").write_text("# Log\n")
+        mcp, store = _setup(tmp_path)
+        result = await _call(
+            mcp, "append_to_note", file_path="log.md", content="Entry about photosynthesis."
+        )
+        assert result["action"] == "appended"  # type: ignore[index]
+        assert (tmp_path / "log.md").read_text() == "# Log\n\nEntry about photosynthesis.\n"
+        store.close()
+
+    @pytest.mark.asyncio
+    async def test_refuses_missing_note(self, tmp_path: Path) -> None:
+        from fastmcp.exceptions import ToolError
+
+        mcp, store = _setup(tmp_path)
+        with pytest.raises(ToolError, match="not found"):
+            await _call(mcp, "append_to_note", file_path="ghost.md", content="x")
+        store.close()
+
+
+class TestMcpIndexNote:
+    @pytest.mark.asyncio
+    async def test_indexes_markdown_note(self, tmp_path: Path) -> None:
+        note = tmp_path / "note.md"
+        note.write_text("# Heading\n\nBody paragraph with content.")
+        mcp, store = _setup(tmp_path)
+        result = await _call(mcp, "index_note", file_path="note.md")
+        assert result["status"] == "ok"  # type: ignore[index]
+        assert result["chunks_added"] > 0  # type: ignore[index]
+        store.close()
+
+    @pytest.mark.asyncio
+    async def test_missing_note_returns_not_found(self, tmp_path: Path) -> None:
+        mcp, store = _setup(tmp_path)
+        result = await _call(mcp, "index_note", file_path="ghost.md")
+        assert result["status"] == "not_found"  # type: ignore[index]
+        store.close()
+
+    @pytest.mark.asyncio
+    async def test_non_markdown_returns_unsupported(self, tmp_path: Path) -> None:
+        (tmp_path / "readme.txt").write_text("hello")
+        mcp, store = _setup(tmp_path)
+        result = await _call(mcp, "index_note", file_path="readme.txt")
+        assert result["status"] == "unsupported"  # type: ignore[index]
+        store.close()
+
+    @pytest.mark.asyncio
+    async def test_rejects_path_outside_vault(self, tmp_path: Path) -> None:
+        from fastmcp.exceptions import ToolError
+
+        mcp, store = _setup(tmp_path)
+        with pytest.raises(ToolError, match="outside the vault"):
+            await _call(mcp, "index_note", file_path="/etc/hosts.md")
+        store.close()

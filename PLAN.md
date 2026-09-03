@@ -1,11 +1,15 @@
 # Plan: Obsidian Semantic Search — Chunking, Indexing & MCP Server
 
+> **Status note.** This was the original build plan, updated in place. The
+> Obsidian plugin it originally described has been removed: MCP is the only
+> client surface, and the vault is reached by reading and writing files on disk.
+
 ## Context
 
 Build a semantic search system for an Obsidian vault stored on iCloud. The system must:
 - Chunk and index Obsidian markdown notes, PDFs, and web pages
-- Provide in-vault search via an Obsidian plugin
-- Expose search as an MCP server for Claude/LLMs
+- ~~Provide in-vault search via an Obsidian plugin~~ *(removed — MCP only)*
+- Expose search **and note writes** as an MCP server for Claude/LLMs
 - Store all vector data inside the vault directory so it syncs automatically via iCloud
 
 This is a greenfield project in `/Users/nitinsrivastava/Documents/obsidian-mcp` (empty git repo).
@@ -20,19 +24,15 @@ This is a greenfield project in `/Users/nitinsrivastava/Documents/obsidian-mcp` 
 ┌─────────────────────────────────────────────────────────┐
 │                    Obsidian Vault (iCloud)               │
 │  ├── Notes/*.md                                         │
-│  ├── .obsidian-search/                                  │
-│  │   └── semantic-search.db   ← sqlite-vec vector store │
-│  └── .obsidian/plugins/obsidian-semantic-search/        │
-│      ├── main.js              ← compiled TS plugin      │
-│      ├── manifest.json                                  │
-│      └── styles.css                                     │
+│  └── .obsidian-search/                                  │
+│      └── semantic-search.db   ← sqlite-vec vector store │
 └─────────────────────────────────────────────────────────┘
-         ▲ reads/writes                ▲ installs plugin
-         │                             │
-┌────────┴────────────────────────────┴──────────────────┐
+         ▲ reads/writes
+         │
+┌────────┴───────────────────────────────────────────────┐
 │              Python Backend (local process)             │
-│  FastAPI server (port 51234)  ←──── Obsidian Plugin    │
 │  FastMCP server (stdio)       ←──── Claude Desktop     │
+│  FastAPI server (port 51234)  ←──── local scripts      │
 │                                                        │
 │  Pipeline: Chunker → Embedder → sqlite-vec store       │
 │  Watcher:  watchdog FSEvents → incremental reindex     │
@@ -79,23 +79,10 @@ obsidian-mcp/
 │   │       └── mcp/
 │   │           └── server.py            # FastMCP tools
 │   │
-│   └── obsidian-plugin/
-│       ├── package.json
-│       ├── tsconfig.json
-│       ├── esbuild.config.mjs
-│       ├── manifest.json
-│       ├── styles.css
-│       └── src/
-│           ├── main.ts          # Plugin class, commands, file save hook
-│           ├── settings.ts      # SemanticSearchSettings + SettingTab
-│           ├── api-client.ts    # typed fetch() wrapper
-│           ├── search-modal.ts  # SuggestModal with debounced search
-│           └── types.ts         # shared TS interfaces
 │
 └── scripts/
-    ├── install.sh               # bootstraps uv, npm install
-    ├── start-backend.sh         # launches uvicorn + MCP server
-    └── build-plugin.sh          # esbuild → copies to vault plugin dir
+    ├── install.sh               # bootstraps uv + pre-commit
+    └── start-backend.sh         # launches uvicorn + MCP server
 ```
 
 ---
@@ -233,34 +220,26 @@ Claude Desktop config (`claude_desktop_config.json`):
 | GET | `/reindex/{job_id}` | Reindex progress |
 | DELETE | `/index/document` | `{file_path}` remove document |
 
-CORS: `allow_origins=["app://obsidian.md"]` for Electron context.
+CORS: none — the HTTP API has no browser client.
 
 ---
 
-## Obsidian Plugin (TypeScript)
+## Vault Writes (replaces the plugin)
 
-**`manifest.json`**: `isDesktopOnly: true` (calls localhost server)
+**`vault/writer.py`** — `VaultWriter`, additive only:
+- `create_note(file_path, content)` — exclusive create, fails if the file exists
+- `append_to_note(file_path, content)` — fails if the file is missing
 
-**Settings** (`settings.ts`):
-- `serverUrl`: `"http://127.0.0.1:51234"`
-- `defaultTopK`: 10
-- `excludedFolders`: `[]`
-- `indexOnSave`: true
-- `showScores`: false
+Guards: `Settings.resolve_in_vault` (symlinks resolved, traversal rejected),
+markdown-only, system/excluded folders refused. Each write is indexed inline
+through the same pipeline the watcher uses, so new content is immediately
+searchable; the watcher's later event is a no-op via mtime dedup.
 
-**Search Modal** (`search-modal.ts`): `SuggestModal` subclass
-- 300ms debounce before API call
-- Renders: filename (bold) + header breadcrumb + 100-char excerpt + source badge
-- Click → `app.workspace.openLinkText()` + scroll to heading
-- Hotkey: `Cmd+Shift+F`
+MCP tools exposed: `create_note`, `append_to_note`, plus `index_note` for
+forcing a re-index of a single markdown file.
 
-**Commands in `main.ts`**:
-- `open-semantic-search` — opens search modal
-- `index-current-url` — reads clipboard URL, calls `/ingest/url`
-
-**File save hook**: `vault.on('modify')` → debounced call to `/ingest/markdown/{path}`
-
-**Build**: `esbuild` bundles `src/main.ts` → `main.js`, externals: `['obsidian', 'electron']`
+Notes edited in Obsidian need no hook: the file watcher picks up saves from
+disk (see below).
 
 ---
 
@@ -307,7 +286,7 @@ CORS: `allow_origins=["app://obsidian.md"]` for Electron context.
 8. `api/server.py` + routes
 9. `watcher/vault_watcher.py`
 10. `mcp/server.py`
-11. `obsidian-plugin/src/*` (TypeScript)
+11. `vault/writer.py` — note create/append
 12. `scripts/` + `README.md`
 
 ---
@@ -317,5 +296,6 @@ CORS: `allow_origins=["app://obsidian.md"]` for Electron context.
 1. **Unit tests**: `pytest packages/backend/tests/` — chunker correctness, store CRUD, search pipeline
 2. **Integration**: Start backend, POST `/ingest/url` with a real URL, verify chunks in DB, call `/search`
 3. **MCP**: Add to Claude Desktop config, ask Claude to `search_notes("quantum computing")`
-4. **Plugin**: Build with `npm run build`, install in test vault, open modal, verify results appear
+4. **Writes**: ask Claude to create a note, confirm it lands in the vault and is
+   immediately searchable
 5. **iCloud sync**: Index on Mac A, check DB file appears on Mac B, run search on Mac B

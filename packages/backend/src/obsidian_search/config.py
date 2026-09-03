@@ -28,12 +28,26 @@ class Settings(BaseSettings):
     host: str = "127.0.0.1"
     port: int = 51234
 
+    # Auth — a bearer token required on every HTTP route except /health.
+    # Optional while bound to loopback, where the OS is the boundary. Binding
+    # to any other interface (the Mac mini setup sets HOST=0.0.0.0) exposes
+    # note contents and file indexing to the whole network, so a token is
+    # mandatory there and the server refuses to start without one.
+    api_token: str | None = None
+
     # Embedding
     # BAAI/bge-small-en-v1.5 (~130 MB, 384 dims) is the default for low memory usage.
     # nomic-ai/nomic-embed-text-v1.5 (~1.5 GB, 768 dims) gives higher quality at the cost of RAM.
     # Changing models on an existing vault requires deleting the DB to rebuild the index.
     embedding_model: str = "BAAI/bge-small-en-v1.5"
     embedding_batch_size: int = 32
+
+    # Torch device for both the embedder and the reranker. CPU is the default
+    # deliberately: bge-small is fast enough on CPU for single-query work, and
+    # MPS permanently maps model weights into both CPU and GPU address space on
+    # Apple Silicon, costing ~1 GB per model. Override only if you have a GPU
+    # worth the memory.
+    device: str = "cpu"
 
     # Reranking — disabled by default; ANN scores from nomic-embed-text are
     # more discriminative than cross-encoder logits for personal notes.
@@ -56,10 +70,20 @@ class Settings(BaseSettings):
     # Indexing
     excluded_folders: list[str] = []
 
+    # URL ingestion — private, loopback, and link-local targets are refused by
+    # default so /ingest/url cannot be pointed at the local network or at a
+    # cloud metadata endpoint. Enable for an intranet wiki you trust.
+    allow_private_urls: bool = False
+
     @field_validator("vault_path", mode="before")
     @classmethod
     def resolve_vault_path(cls, v: str | Path) -> Path:
         return Path(v)
+
+    @property
+    def is_loopback_host(self) -> bool:
+        """True if the configured host only accepts connections from this machine."""
+        return self.host in {"127.0.0.1", "::1", "localhost"}
 
     @property
     def db_dir(self) -> Path:

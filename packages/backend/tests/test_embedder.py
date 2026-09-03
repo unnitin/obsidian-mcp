@@ -6,7 +6,7 @@ import threading
 from unittest.mock import MagicMock, patch
 
 import numpy as np
-from obsidian_search.embedding.embedder import Embedder
+from obsidian_search.embedding.embedder import Embedder, prefixes_for
 
 
 def _mock_model(output_dims: int = 384) -> MagicMock:
@@ -24,6 +24,7 @@ def _bare_embedder(dims: int = 384) -> Embedder:
     e = Embedder.__new__(Embedder)
     e.model_name = "test-model"
     e.dims = dims
+    e.prefixes = prefixes_for("test-model")
     e._model = _mock_model(dims)
     e._sem = threading.Semaphore(1)
     return e
@@ -102,16 +103,18 @@ class TestEmbedderEncode:
 
 
 class TestEmbedderPrefixes:
-    def test_encode_documents_adds_index_prefix(self) -> None:
-        """Covers encode_documents: prepends search_document prefix."""
+    def test_encode_documents_applies_the_models_document_prefix(self) -> None:
+        """Covers encode_documents: prepends whatever the model expects."""
         e = _bare_embedder()
+        e.prefixes = prefixes_for("nomic-ai/nomic-embed-text-v1.5")
         e.encode_documents(["my note content"])
         call_args = e._model.encode.call_args[0][0]
         assert call_args[0].startswith("search_document: ")
 
-    def test_encode_query_adds_query_prefix(self) -> None:
-        """Covers encode_query: prepends search_query prefix."""
+    def test_encode_query_applies_the_models_query_prefix(self) -> None:
+        """Covers encode_query: prepends whatever the model expects."""
         e = _bare_embedder()
+        e.prefixes = prefixes_for("nomic-ai/nomic-embed-text-v1.5")
         result = e.encode_query("quantum computing")
         call_args = e._model.encode.call_args[0][0]
         assert call_args[0].startswith("search_query: ")
@@ -145,3 +148,101 @@ class TestEmbedderSearcher:
     def test_model_none_before_load(self) -> None:
         e = Embedder()
         assert e._model is None
+
+
+class TestDeviceConfiguration:
+    """One device setting, honoured by both models."""
+
+    def test_default_device_is_cpu(self) -> None:
+        assert Embedder().device == "cpu"
+
+    def test_device_is_passed_to_sentence_transformer(self) -> None:
+        e = Embedder(model_name="fake-model", device="cuda")
+        with patch(
+            "sentence_transformers.SentenceTransformer", return_value=_mock_model()
+        ) as MockST:
+            e._load()
+        assert MockST.call_args.kwargs["device"] == "cuda"
+
+    def test_reranker_default_device_is_cpu(self) -> None:
+        from obsidian_search.search.reranker import Reranker
+
+        assert Reranker(model_name="fake-reranker").device == "cpu"
+
+    def test_reranker_does_not_choose_mps_itself(self) -> None:
+        """Regression: the reranker used to pick MPS regardless of settings,
+        undoing the CPU default the embedder deliberately uses."""
+        from obsidian_search.search.reranker import Reranker
+
+        r = Reranker(model_name="fake-reranker")
+        with patch("sentence_transformers.CrossEncoder", return_value=MagicMock()) as MockCE:
+            r._load()
+        assert MockCE.call_args.kwargs["device"] == "cpu"
+
+    def test_reranker_honours_an_explicit_device(self) -> None:
+        from obsidian_search.search.reranker import Reranker
+
+        r = Reranker(model_name="fake-reranker", device="mps")
+        with patch("sentence_transformers.CrossEncoder", return_value=MagicMock()) as MockCE:
+            r._load()
+        assert MockCE.call_args.kwargs["device"] == "mps"
+
+
+class TestTaskPrefixes:
+    """Prefix conventions are per-model and must not leak across models."""
+
+    def test_bge_uses_query_instruction_and_no_document_prefix(self) -> None:
+        from obsidian_search.embedding.embedder import prefixes_for
+
+        p = prefixes_for("BAAI/bge-small-en-v1.5")
+        assert p.document == ""
+        assert p.query == "Represent this sentence for searching relevant passages: "
+
+    def test_nomic_uses_search_task_prefixes(self) -> None:
+        from obsidian_search.embedding.embedder import prefixes_for
+
+        p = prefixes_for("nomic-ai/nomic-embed-text-v1.5")
+        assert p.document == "search_document: "
+        assert p.query == "search_query: "
+
+    def test_unknown_model_gets_no_prefixes(self) -> None:
+        from obsidian_search.embedding.embedder import prefixes_for
+
+        p = prefixes_for("some-org/some-new-model")
+        assert p.document == ""
+        assert p.query == ""
+
+    def test_default_model_does_not_get_nomic_prefixes(self) -> None:
+        """Regression: the nomic prefixes were applied to every model."""
+        e = Embedder()  # default is bge-small
+        assert e.prefixes.document == ""
+        assert "search_document" not in e.prefixes.query
+
+    def test_encode_documents_passes_text_through_for_bge(self) -> None:
+        e = _bare_embedder()
+        e.prefixes = Embedder(model_name="BAAI/bge-small-en-v1.5").prefixes
+        e.encode_documents(["chunk one", "chunk two"])
+        sent = e._model.encode.call_args[0][0]
+        assert sent == ["chunk one", "chunk two"]
+
+    def test_encode_documents_prefixes_for_nomic(self) -> None:
+        e = _bare_embedder()
+        e.prefixes = Embedder(model_name="nomic-ai/nomic-embed-text-v1.5").prefixes
+        e.encode_documents(["chunk one"])
+        sent = e._model.encode.call_args[0][0]
+        assert sent == ["search_document: chunk one"]
+
+    def test_encode_query_applies_query_instruction(self) -> None:
+        e = _bare_embedder()
+        e.prefixes = Embedder(model_name="BAAI/bge-small-en-v1.5").prefixes
+        e.encode_query("what is entanglement")
+        sent = e._model.encode.call_args[0][0]
+        assert sent == [
+            "Represent this sentence for searching relevant passages: what is entanglement"
+        ]
+
+    def test_profile_distinguishes_model_and_prefixes(self) -> None:
+        bge = Embedder(model_name="BAAI/bge-small-en-v1.5").profile
+        nomic = Embedder(model_name="nomic-ai/nomic-embed-text-v1.5").profile
+        assert bge != nomic
+        assert "bge-small" in bge
