@@ -104,9 +104,12 @@ on upgrade — see **Migration** at the end of this section.
 
 ### Migration
 
-**Rebuild the index.** The embedding-prefix fix changes the vectors the default
-model produces, so an existing index is not comparable with new queries. The
-server will refuse to start against a mismatched index and tell you this:
+**Rebuild the index — this will not happen automatically and you will not be
+warned.** The embedding-prefix fix changes the vectors the default model
+produces, so an index built before this release is not comparable with new
+queries. The profile guard only fires when a *previously recorded* profile
+differs; an older index has no recorded profile, so the server starts, adopts
+the new profile, and goes on querying stale vectors with no error. Delete it:
 
 ```bash
 rm /path/to/vault/.obsidian-search/semantic-search.db
