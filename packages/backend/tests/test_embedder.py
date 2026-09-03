@@ -246,3 +246,28 @@ class TestTaskPrefixes:
         nomic = Embedder(model_name="nomic-ai/nomic-embed-text-v1.5").profile
         assert bge != nomic
         assert "bge-small" in bge
+
+
+class TestBatchSizePlumbing:
+    """OBSIDIAN_SEARCH_EMBEDDING_BATCH_SIZE must reach the model."""
+
+    def test_default_batch_size(self) -> None:
+        assert Embedder().batch_size == 32
+
+    def test_batch_size_reaches_the_model(self) -> None:
+        """Regression: encode() hardcoded batch_size=32, so the setting did nothing."""
+        e = _bare_embedder()
+        e.batch_size = 128
+        e.encode(["a", "b"])
+        assert e._model.encode.call_args.kwargs["batch_size"] == 128
+
+    def test_settings_value_is_passed_through(self) -> None:
+        from obsidian_search.config import Settings
+
+        settings = Settings(vault_path="/tmp/v", embedding_batch_size=64)
+        e = Embedder(
+            model_name=settings.embedding_model,
+            device=settings.device,
+            batch_size=settings.embedding_batch_size,
+        )
+        assert e.batch_size == 64

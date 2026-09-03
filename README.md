@@ -388,7 +388,7 @@ All settings can be set via environment variables or a `.env` file in the projec
 | `OBSIDIAN_SEARCH_ALLOW_PRIVATE_URLS` | `false` | Allow `/ingest/url` to fetch private/loopback addresses |
 | `OBSIDIAN_SEARCH_EMBEDDING_MODEL` | `BAAI/bge-small-en-v1.5` | HuggingFace model ID |
 | `OBSIDIAN_SEARCH_DEVICE` | `cpu` | Torch device for the embedder and reranker. MPS costs ~1 GB of address space per model |
-| `OBSIDIAN_SEARCH_DEFAULT_TOP_K` | `10` | Default number of search results |
+| `OBSIDIAN_SEARCH_DEFAULT_TOP_K` | `10` | Result count when a caller omits `top_k` |
 | `OBSIDIAN_SEARCH_RERANK_CANDIDATES` | `50` | ANN candidates fetched before filtering and optional reranking |
 | `OBSIDIAN_SEARCH_CHUNK_MAX_TOKENS` | `512` | Maximum tokens per chunk |
 | `OBSIDIAN_SEARCH_CHUNK_MIN_TOKENS` | `64` | Minimum tokens before merging |

@@ -9,7 +9,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import IO, Any
 
-from obsidian_search.config import Settings
+from obsidian_search.config import Settings, VaultPathError
 from obsidian_search.ingestion.pipeline import IndexingPipeline, iter_vault_files
 
 logger = logging.getLogger(__name__)
@@ -225,10 +225,22 @@ class VaultWatcher:
         # Only handle supported extensions
         if path.suffix.lower() not in {".md", ".pdf"}:
             return
+
+        # Confine to the vault. is_ignored_path only looks for system folder
+        # names among the path parts, so it says nothing about whether the path
+        # is inside the vault at all — and on_moved forwards dest_path straight
+        # through, so a note moved out of the vault would otherwise be indexed
+        # at its new location outside it.
+        try:
+            path = self.settings.resolve_in_vault(path)
+        except VaultPathError:
+            logger.debug("Ignoring event outside the vault: %s", src_path)
+            return
+
         if self.settings.is_ignored_path(path):
             return
 
-        key = src_path
+        key = str(path)
         with self._lock:
             existing = self._timers.pop(key, None)
             if existing is not None:

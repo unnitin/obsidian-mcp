@@ -25,7 +25,9 @@ from obsidian_search.store.vector_store import VectorStore
 
 class SearchRequest(BaseModel):
     query: Annotated[str, Field(min_length=1)]
-    top_k: Annotated[int, Field(default=10, ge=1, le=100)] = 10
+    # None means "use OBSIDIAN_SEARCH_DEFAULT_TOP_K". A hardcoded default here
+    # made that setting unreachable, because the field was always populated.
+    top_k: Annotated[int | None, Field(default=None, ge=1, le=100)] = None
     source_types: list[str] | None = None
     tags: list[str] | None = None
 
@@ -171,7 +173,11 @@ def main() -> None:
 
     settings.db_dir.mkdir(parents=True, exist_ok=True)
 
-    embedder = Embedder(model_name=settings.embedding_model, device=settings.device)
+    embedder = Embedder(
+        model_name=settings.embedding_model,
+        device=settings.device,
+        batch_size=settings.embedding_batch_size,
+    )
     embedder.load()
 
     store = VectorStore(settings.db_path)
