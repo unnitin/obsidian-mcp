@@ -3,7 +3,7 @@
 from pathlib import Path
 
 import pytest
-from obsidian_search.config import Settings
+from obsidian_search.config import Settings, VaultPathError
 from pydantic import ValidationError
 
 
@@ -114,3 +114,49 @@ class TestSettingsIgnoredPaths:
     def test_nested_excluded_folder_ignored(self, tmp_path: Path) -> None:
         s = Settings(vault_path=str(tmp_path), excluded_folders=["Archive"])
         assert s.is_ignored_path(tmp_path / "Archive" / "2023" / "old.md")
+
+
+class TestResolveInVault:
+    def test_absolute_path_inside_vault_is_returned(self, tmp_path: Path) -> None:
+        settings = Settings(vault_path=str(tmp_path))
+        note = tmp_path / "notes" / "a.md"
+        assert settings.resolve_in_vault(str(note)) == note.resolve()
+
+    def test_relative_path_resolved_against_vault(self, tmp_path: Path) -> None:
+        settings = Settings(vault_path=str(tmp_path))
+        assert settings.resolve_in_vault("notes/a.md") == (tmp_path / "notes" / "a.md").resolve()
+
+    def test_vault_root_itself_is_allowed(self, tmp_path: Path) -> None:
+        settings = Settings(vault_path=str(tmp_path))
+        assert settings.resolve_in_vault(str(tmp_path)) == tmp_path.resolve()
+
+    def test_absolute_path_outside_vault_rejected(self, tmp_path: Path) -> None:
+        settings = Settings(vault_path=str(tmp_path))
+        with pytest.raises(VaultPathError, match="outside the vault"):
+            settings.resolve_in_vault("/etc/hosts")
+
+    def test_dotdot_traversal_rejected(self, tmp_path: Path) -> None:
+        settings = Settings(vault_path=str(tmp_path / "vault"))
+        (tmp_path / "vault").mkdir()
+        (tmp_path / "outside.md").write_text("x")
+        with pytest.raises(VaultPathError):
+            settings.resolve_in_vault("../outside.md")
+
+    def test_symlink_escape_rejected(self, tmp_path: Path) -> None:
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        outside = tmp_path / "outside.md"
+        outside.write_text("secret")
+        (vault / "link.md").symlink_to(outside)
+        settings = Settings(vault_path=str(vault))
+        with pytest.raises(VaultPathError):
+            settings.resolve_in_vault("link.md")
+
+    def test_sibling_directory_prefix_not_treated_as_inside(self, tmp_path: Path) -> None:
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        sibling = tmp_path / "vault-backup"
+        sibling.mkdir()
+        settings = Settings(vault_path=str(vault))
+        with pytest.raises(VaultPathError):
+            settings.resolve_in_vault(str(sibling / "a.md"))

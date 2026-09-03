@@ -5,6 +5,9 @@ from __future__ import annotations
 import json
 import sqlite3
 import struct
+import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -20,29 +23,64 @@ def _pack(v: np.ndarray) -> bytes:
 
 
 class VectorStore:
+    """SQLite-backed vector store.
+
+    The connection is shared across threads (``check_same_thread=False``) because
+    the API threadpool, the watcher's debounce timers, and the ``/reindex`` worker
+    all write through the same instance.  A single connection has one transaction
+    slot, so every write is serialised through ``_write_lock``; without it,
+    concurrent ``BEGIN IMMEDIATE`` calls raise "cannot start a transaction within
+    a transaction" and a loser's ``rollback()`` discards the winner's work.
+
+    Reads deliberately do not take the lock — they are safe on a shared
+    connection and must not block behind a long reindex batch.
+    """
+
     def __init__(self, db_path: Path) -> None:
         self.db_path = db_path
         self._conn: sqlite3.Connection | None = None
         self._dims: int | None = None
+        self._write_lock = threading.RLock()
 
     # ── Connection ────────────────────────────────────────────────────────────
 
     def _conn_(self) -> sqlite3.Connection:
         if self._conn is None:
-            self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
-            self._conn.row_factory = sqlite3.Row
-            self._conn.enable_load_extension(True)
-            sqlite_vec.load(self._conn)
-            self._conn.enable_load_extension(False)
-            self._conn.execute("PRAGMA journal_mode=WAL")
-            self._conn.execute("PRAGMA synchronous=NORMAL")
+            with self._write_lock:
+                # Re-check under the lock: two threads can race the outer test.
+                if self._conn is None:
+                    conn = sqlite3.connect(self.db_path, check_same_thread=False)
+                    conn.row_factory = sqlite3.Row
+                    conn.enable_load_extension(True)
+                    sqlite_vec.load(conn)
+                    conn.enable_load_extension(False)
+                    conn.execute("PRAGMA journal_mode=WAL")
+                    conn.execute("PRAGMA synchronous=NORMAL")
+                    self._conn = conn
         return self._conn
+
+    @contextmanager
+    def _write_txn(self) -> Iterator[sqlite3.Connection]:
+        """Hold the write lock for one IMMEDIATE transaction; commit or roll back."""
+        with self._write_lock:
+            conn = self._conn_()
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                yield conn
+            except BaseException:
+                conn.rollback()
+                raise
+            conn.commit()
 
     # ── Schema ────────────────────────────────────────────────────────────────
 
     def initialize(self, dims: int) -> None:
         self._dims = dims
-        conn = self._conn_()
+        with self._write_lock:
+            conn = self._conn_()
+            self._create_schema(conn, dims)
+
+    def _create_schema(self, conn: sqlite3.Connection, dims: int) -> None:
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS chunks (
                 id            TEXT PRIMARY KEY,
@@ -85,9 +123,7 @@ class VectorStore:
     def upsert_chunks(self, chunks: list[Chunk], embeddings: np.ndarray) -> None:
         if not chunks:
             return
-        conn = self._conn_()
-        conn.execute("BEGIN IMMEDIATE")
-        try:
+        with self._write_txn() as conn:
             for chunk, vec in zip(chunks, embeddings, strict=True):
                 conn.execute(
                     """INSERT OR REPLACE INTO chunks
@@ -113,26 +149,20 @@ class VectorStore:
                     "INSERT INTO chunk_embeddings (chunk_id, embedding) VALUES (?, ?)",
                     (chunk.id, _pack(vec)),
                 )
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
 
     def delete_by_file(self, file_path: str) -> int:
-        conn = self._conn_()
-        ids = [
-            r[0]
-            for r in conn.execute(
-                "SELECT id FROM chunks WHERE file_path = ?", (file_path,)
-            ).fetchall()
-        ]
-        if not ids:
-            return 0
-        conn.execute("BEGIN IMMEDIATE")
-        placeholders = ",".join("?" * len(ids))
-        conn.execute(f"DELETE FROM chunk_embeddings WHERE chunk_id IN ({placeholders})", ids)
-        conn.execute("DELETE FROM chunks WHERE file_path = ?", (file_path,))
-        conn.commit()
+        with self._write_txn() as conn:
+            ids = [
+                r[0]
+                for r in conn.execute(
+                    "SELECT id FROM chunks WHERE file_path = ?", (file_path,)
+                ).fetchall()
+            ]
+            if not ids:
+                return 0
+            placeholders = ",".join("?" * len(ids))
+            conn.execute(f"DELETE FROM chunk_embeddings WHERE chunk_id IN ({placeholders})", ids)
+            conn.execute("DELETE FROM chunks WHERE file_path = ?", (file_path,))
         return len(ids)
 
     # ── Read ──────────────────────────────────────────────────────────────────
@@ -224,6 +254,7 @@ class VectorStore:
         }
 
     def close(self) -> None:
-        if self._conn:
-            self._conn.close()
-            self._conn = None
+        with self._write_lock:
+            if self._conn:
+                self._conn.close()
+                self._conn = None

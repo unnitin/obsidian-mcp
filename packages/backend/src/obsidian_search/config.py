@@ -6,6 +6,10 @@ from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+class VaultPathError(ValueError):
+    """Raised when a caller-supplied path resolves outside the vault."""
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="OBSIDIAN_SEARCH_",
@@ -64,6 +68,26 @@ class Settings(BaseSettings):
     @property
     def db_path(self) -> Path:
         return self.db_dir / "semantic-search.db"
+
+    def resolve_in_vault(self, file_path: str | Path) -> Path:
+        """Resolve *file_path* and confirm it stays inside the vault.
+
+        Relative paths are resolved against the vault root.  Symlinks are
+        followed on both sides before comparing, so a link inside the vault
+        cannot be used to reach a file outside it.
+
+        Raises:
+            VaultPathError: if the resolved path escapes the vault.
+        """
+        path = Path(file_path).expanduser()
+        if not path.is_absolute():
+            path = self.vault_path / path
+
+        resolved = path.resolve()
+        vault = self.vault_path.resolve()
+        if resolved != vault and not resolved.is_relative_to(vault):
+            raise VaultPathError(f"Path is outside the vault: {str(file_path)!r}")
+        return resolved
 
     def is_ignored_path(self, path: Path) -> bool:
         """Return True if path should be excluded from indexing."""

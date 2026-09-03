@@ -10,7 +10,7 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 
-from obsidian_search.config import Settings
+from obsidian_search.config import Settings, VaultPathError
 from obsidian_search.ingestion.pipeline import IndexingPipeline
 from obsidian_search.models import IngestResult
 
@@ -27,6 +27,10 @@ def _evict_finished_jobs() -> None:
     for jid in finished[:-_MAX_COMPLETED_JOBS]:
         del _jobs[jid]
         _job_stop_events.pop(jid, None)
+
+
+def _is_url(value: str) -> bool:
+    return value.startswith(("http://", "https://"))
 
 
 class ReindexStatus(BaseModel):
@@ -61,9 +65,23 @@ class RemoveDocumentRequest(BaseModel):
 # ── Factory ───────────────────────────────────────────────────────────────────
 
 
-def create_ingest_router(pipeline: IndexingPipeline, settings: Settings | None = None) -> APIRouter:
+def create_ingest_router(pipeline: IndexingPipeline, settings: Settings) -> APIRouter:
     """Return a router with all ingest routes bound to *pipeline*."""
     router = APIRouter()
+
+    def _in_vault(file_path: str) -> Path:
+        """Resolve a caller-supplied path, rejecting anything outside the vault.
+
+        Checked before existence so the endpoint cannot be used to probe for
+        files elsewhere on the machine.
+        """
+        try:
+            return settings.resolve_in_vault(file_path)
+        except VaultPathError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=str(exc),
+            ) from exc
 
     @router.post("/ingest/url", response_model=IngestResult, status_code=status.HTTP_200_OK)
     def ingest_url(req: IngestUrlRequest) -> IngestResult:
@@ -77,7 +95,7 @@ def create_ingest_router(pipeline: IndexingPipeline, settings: Settings | None =
 
     @router.post("/ingest/pdf", response_model=IngestResult, status_code=status.HTTP_200_OK)
     def ingest_pdf(req: IngestPdfRequest) -> IngestResult:
-        path = Path(req.file_path)
+        path = _in_vault(req.file_path)
         if not path.exists():
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -93,7 +111,7 @@ def create_ingest_router(pipeline: IndexingPipeline, settings: Settings | None =
 
     @router.post("/ingest/file", response_model=IngestResult, status_code=status.HTTP_200_OK)
     def ingest_file(req: IngestFileRequest) -> IngestResult:
-        path = Path(req.file_path)
+        path = _in_vault(req.file_path)
         if not path.exists():
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -109,16 +127,15 @@ def create_ingest_router(pipeline: IndexingPipeline, settings: Settings | None =
 
     @router.delete("/index/document", response_model=IngestResult, status_code=status.HTTP_200_OK)
     def remove_document(req: RemoveDocumentRequest) -> IngestResult:
-        removed = pipeline.store.delete_by_file(req.file_path)
+        # Web sources are keyed by URL, not by a vault path — pass those through.
+        key = req.file_path
+        if not _is_url(key):
+            key = str(_in_vault(key))
+        removed = pipeline.store.delete_by_file(key)
         return IngestResult(chunks_added=0, chunks_removed=removed, status="ok")
 
     @router.post("/reindex", response_model=ReindexStatus, status_code=status.HTTP_202_ACCEPTED)
     def start_reindex() -> ReindexStatus:
-        if settings is None:
-            raise HTTPException(
-                status_code=status.HTTP_501_NOT_IMPLEMENTED,
-                detail="Reindex requires settings to be configured",
-            )
         _evict_finished_jobs()
         job_id = str(uuid.uuid4())
         job = ReindexStatus(job_id=job_id, status="running")

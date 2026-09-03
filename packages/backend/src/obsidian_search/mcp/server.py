@@ -82,13 +82,7 @@ def _build_mcp_server(
         Returns:
             The full text content of the file.
         """
-        path = Path(file_path)
-        if not path.is_absolute():
-            path = settings.vault_path / file_path
-        try:
-            path.resolve().relative_to(settings.vault_path.resolve())
-        except ValueError as exc:
-            raise ValueError(f"Path is outside the vault: {file_path!r}") from exc
+        path = settings.resolve_in_vault(file_path)
         if not path.exists():
             raise FileNotFoundError(
                 f"File not found: {file_path!r}. "
@@ -115,12 +109,12 @@ def _build_mcp_server(
         """Index a PDF file at the given absolute path.
 
         Args:
-            file_path: Absolute path to the PDF file.
+            file_path: Absolute path to the PDF file, inside the vault.
 
         Returns:
             Ingest result with chunks_added and status.
         """
-        result = pipeline.index_file(Path(file_path))
+        result = pipeline.index_file(settings.resolve_in_vault(file_path))
         return result.model_dump()
 
     @mcp.tool()
@@ -186,8 +180,12 @@ def _build_mcp_server(
         Returns:
             Dict with chunks_removed.
         """
-        removed = store.delete_by_file(file_path)
-        return {"file_path": file_path, "chunks_removed": removed}
+        # Web sources are keyed by URL, not by a vault path — pass those through.
+        key = file_path
+        if not key.startswith(("http://", "https://")):
+            key = str(settings.resolve_in_vault(key))
+        removed = store.delete_by_file(key)
+        return {"file_path": key, "chunks_removed": removed}
 
     return mcp
 
