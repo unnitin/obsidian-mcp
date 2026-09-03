@@ -2,16 +2,27 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import threading
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import IO, Any
 
 from obsidian_search.config import Settings
-from obsidian_search.ingestion.pipeline import IndexingPipeline
+from obsidian_search.ingestion.pipeline import IndexingPipeline, iter_vault_files
 
 logger = logging.getLogger(__name__)
+
+
+def _lock_path(vault_path: Path) -> Path:
+    """Per-vault lock file, outside the vault so it is never synced.
+
+    Keyed by the resolved vault path, so two vaults on one machine watch
+    independently while two processes on the same vault contend.
+    """
+    digest = hashlib.sha256(str(vault_path.resolve()).encode()).hexdigest()[:16]
+    return Path.home() / ".cache" / "obsidian-search" / f"{digest}.watcher.lock"
 
 
 class VaultWatcher:
@@ -27,6 +38,15 @@ class VaultWatcher:
     Startup reconciliation: on ``start()`` we walk the vault and reindex any
     file whose mtime is newer than what is stored in the DB.  This catches
     changes synced from other devices via iCloud while the backend was offline.
+
+    Single owner per vault: the API server and the MCP server each construct a
+    watcher, and the intended setup can run both.  Two watchers on one vault
+    means two startup reconciliations re-embedding the same files and two
+    processes writing the same SQLite index on every save.  ``start()``
+    therefore takes an exclusive file lock keyed to the vault; whichever
+    process gets it does the watching, and the other skips both the walk and
+    the observer.  The lock is advisory and per-machine, which is what we want:
+    two Macs syncing the same vault each watch their own local copy.
     """
 
     def __init__(self, settings: Settings, pipeline: IndexingPipeline) -> None:
@@ -36,6 +56,7 @@ class VaultWatcher:
         self._timers: dict[str, threading.Timer] = {}
         self._lock = threading.Lock()
         self._running = False
+        self._lock_file: IO[str] | None = None
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -44,12 +65,30 @@ class VaultWatcher:
         return self._running
 
     def start(self) -> None:
-        """Start the watcher and run startup reconciliation."""
+        """Start the watcher and run startup reconciliation.
+
+        Does nothing if another process already owns this vault — check
+        ``is_running`` to find out whether this instance took ownership.
+        """
         if self._running:
             return
 
-        self._reconcile()
-        self._start_observer()
+        if not self._acquire_ownership():
+            logger.warning(
+                "Another obsidian-search process is already watching %s — "
+                "this process will not reconcile or watch. Its index writes "
+                "still work; only one process reindexes on file change.",
+                self.settings.vault_path,
+            )
+            return
+
+        try:
+            self._reconcile()
+            self._start_observer()
+        except Exception:
+            self._release_ownership()
+            raise
+
         self._running = True
         logger.info("VaultWatcher started: %s", self.settings.vault_path)
 
@@ -74,23 +113,60 @@ class VaultWatcher:
                 pass
             self._observer = None
 
+        self._release_ownership()
         logger.info("VaultWatcher stopped")
+
+    # ── Ownership ─────────────────────────────────────────────────────────────
+
+    def _acquire_ownership(self) -> bool:
+        """Try to become the single watcher for this vault.
+
+        Returns True if this process may watch. On platforms without
+        ``fcntl`` there is no cross-process lock available, so we assume a
+        single process rather than refusing to watch at all.
+        """
+        try:
+            import fcntl
+        except ImportError:
+            return True
+
+        path = _lock_path(self.settings.vault_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        handle = path.open("w")
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            handle.close()
+            return False
+
+        self._lock_file = handle
+        return True
+
+    def _release_ownership(self) -> None:
+        """Drop the vault lock. The OS also drops it if the process dies."""
+        handle, self._lock_file = self._lock_file, None
+        if handle is None:
+            return
+        try:
+            import fcntl
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        except (ImportError, OSError):  # noqa: S110 — closing releases it anyway
+            pass
+        finally:
+            handle.close()
 
     # ── Internal ──────────────────────────────────────────────────────────────
 
     def _reconcile(self) -> None:
         """Reindex changed files and evict deleted files from the index."""
-        vault = self.settings.vault_path
         on_disk: set[str] = set()
-        for pattern in ("*.md", "*.pdf"):
-            for path in vault.rglob(pattern):
-                if self.settings.is_ignored_path(path):
-                    continue
-                on_disk.add(str(path))
-                try:
-                    self.pipeline.index_file(path)
-                except Exception:  # noqa: BLE001
-                    logger.exception("Reconciliation error for %s", path)
+        for path in iter_vault_files(self.settings):
+            on_disk.add(str(path))
+            try:
+                self.pipeline.index_file(path)
+            except Exception:  # noqa: BLE001
+                logger.exception("Reconciliation error for %s", path)
 
         # Evict index entries for vault files that no longer exist on disk.
         for file_path in self.pipeline.store.list_files():
