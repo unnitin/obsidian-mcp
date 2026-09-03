@@ -89,7 +89,11 @@ obsidian-mcp/
 
 ## Key Technical Decisions
 
-### Embedding Model: `nomic-embed-text-v1.5` via `sentence-transformers`
+### Embedding Model: `bge-small-en-v1.5` via `sentence-transformers`
+
+*(Originally planned as `nomic-embed-text-v1.5`; changed in 2a5e949 to cut
+resident memory from ~1.5 GB to ~130 MB. Task prefixes are per-model — see
+`embedding/embedder.py`.)*
 - **Fully local** — works offline, no API key needed
 - 768 dimensions, 8192-token context (ideal for long notes)
 - Uses Apple MPS backend automatically on Apple Silicon (~10x vs CPU)

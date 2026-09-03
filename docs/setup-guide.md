@@ -38,6 +38,7 @@ The server starts at `http://127.0.0.1:51234`.  On first run it downloads the
 | `VAULT_PATH` | *(required)* | Absolute path to your Obsidian vault |
 | `OBSIDIAN_SEARCH_PORT` | `51234` | Server listen port |
 | `OBSIDIAN_SEARCH_HOST` | `127.0.0.1` | Bind address |
+| `OBSIDIAN_SEARCH_API_TOKEN` | *(none)* | Bearer token for every route except `/health`; required when `HOST` is not loopback |
 | `OBSIDIAN_SEARCH_EMBEDDING_MODEL` | `BAAI/bge-small-en-v1.5` | HuggingFace model ID |
 
 The backend automatically indexes your vault on startup and watches for file
@@ -56,7 +57,8 @@ See [mcp-setup.md](./mcp-setup.md).
 ```bash
 # Check server is running
 curl http://127.0.0.1:51234/health
-# → {"status":"ok","vault_path":"/path/to/vault"}
+# → {"status":"ok"}
+# /health is the only unauthenticated route, and says nothing about the vault.
 
 # Check index stats
 curl http://127.0.0.1:51234/status

@@ -214,6 +214,12 @@ Create `~/Library/LaunchAgents/com.obsidian-search.backend.plist`:
     <string>/Users/yourname</string>
     <key>OBSIDIAN_SEARCH_HOST</key>
     <string>0.0.0.0</string>
+    <!-- Required: listening beyond loopback without a token would expose note
+         contents and file indexing to the whole network, so the server exits
+         at startup if this is missing. Generate one with:
+         python -c 'import secrets; print(secrets.token_urlsafe(32))' -->
+    <key>OBSIDIAN_SEARCH_API_TOKEN</key>
+    <string>paste-your-generated-token-here</string>
   </dict>
 
   <key>RunAtLoad</key>
@@ -383,7 +389,7 @@ All settings can be set via environment variables or a `.env` file in the projec
 | `OBSIDIAN_SEARCH_EMBEDDING_MODEL` | `BAAI/bge-small-en-v1.5` | HuggingFace model ID |
 | `OBSIDIAN_SEARCH_DEVICE` | `cpu` | Torch device for the embedder and reranker. MPS costs ~1 GB of address space per model |
 | `OBSIDIAN_SEARCH_DEFAULT_TOP_K` | `10` | Default number of search results |
-| `OBSIDIAN_SEARCH_RERANK_CANDIDATES` | `50` | Candidates passed to CrossEncoder |
+| `OBSIDIAN_SEARCH_RERANK_CANDIDATES` | `50` | ANN candidates fetched before filtering and optional reranking |
 | `OBSIDIAN_SEARCH_CHUNK_MAX_TOKENS` | `512` | Maximum tokens per chunk |
 | `OBSIDIAN_SEARCH_CHUNK_MIN_TOKENS` | `64` | Minimum tokens before merging |
 | `OBSIDIAN_SEARCH_EXCLUDED_FOLDERS` | `[]` | JSON array of folder names to skip |
@@ -395,7 +401,7 @@ All settings can be set via environment variables or a `.env` file in the projec
 
 | Layer | Technology |
 |-------|-----------|
-| Embeddings | `sentence-transformers` — nomic-embed-text-v1.5 (768d, 8192 ctx) |
+| Embeddings | `sentence-transformers` — bge-small-en-v1.5 (384d), CPU by default |
 | Reranking | `sentence-transformers` CrossEncoder — ms-marco-MiniLM-L-6-v2 |
 | Vector store | `sqlite-vec` — single-file, iCloud-safe |
 | PDF parsing | `pymupdf4llm` |
