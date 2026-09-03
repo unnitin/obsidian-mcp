@@ -55,8 +55,16 @@ class VectorStore:
                     conn.enable_load_extension(True)
                     sqlite_vec.load(conn)
                     conn.enable_load_extension(False)
-                    conn.execute("PRAGMA journal_mode=WAL")
-                    conn.execute("PRAGMA synchronous=NORMAL")
+                    # Rollback journal, not WAL. The DB lives inside an
+                    # iCloud-synced vault, and WAL keeps a -wal sidecar that
+                    # iCloud can upload out of step with the .db, producing a
+                    # torn database on another Mac. DELETE mode removes its
+                    # journal at the end of every transaction, so at rest there
+                    # is exactly one file to sync.
+                    conn.execute("PRAGMA journal_mode=DELETE")
+                    # FULL, not NORMAL: in rollback-journal mode NORMAL skips
+                    # the commit fsync, which is the case that corrupts.
+                    conn.execute("PRAGMA synchronous=FULL")
                     # The API and MCP processes can both hold the DB open, so a
                     # writer must wait for the other's transaction rather than
                     # failing immediately with "database is locked".

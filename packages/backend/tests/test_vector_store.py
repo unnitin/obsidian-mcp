@@ -523,3 +523,80 @@ class TestEmbeddingProfileGuard:
         store.upsert_chunks([self._chunk()], np.ones((1, DIMS), dtype=np.float32))
         assert store.stats()["total_chunks"] == 1
         store.close()
+
+
+class TestJournalMode:
+    """The DB lives in an iCloud-synced vault, so it must be one file at rest."""
+
+    def _chunk(self, key: str = "c1") -> Chunk:
+        return Chunk(
+            id=key,
+            source_type=SourceType.MARKDOWN,
+            file_path=f"/vault/{key}.md",
+            content="body text",
+            mtime=1.0,
+            chunk_index=0,
+        )
+
+    def test_uses_rollback_journal_not_wal(self, tmp_path: Path) -> None:
+        store = _store(tmp_path)
+        mode = store._conn_().execute("PRAGMA journal_mode").fetchone()[0]
+        assert mode == "delete"
+        store.close()
+
+    def test_no_sidecar_files_after_writes(self, tmp_path: Path) -> None:
+        store = VectorStore(tmp_path / "index.db")
+        store.initialize(dims=DIMS)
+        for i in range(5):
+            store.upsert_chunks([self._chunk(f"c{i}")], np.ones((1, DIMS), dtype=np.float32))
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["index.db"]
+        store.close()
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["index.db"]
+
+    def test_busy_timeout_is_set_for_cross_process_writers(self, tmp_path: Path) -> None:
+        store = _store(tmp_path)
+        assert store._conn_().execute("PRAGMA busy_timeout").fetchone()[0] > 0
+        store.close()
+
+    def test_existing_wal_index_migrates_without_data_loss(self, tmp_path: Path) -> None:
+        """Upgrade path: an index built in WAL mode must convert cleanly."""
+        import sqlite3
+
+        import sqlite_vec
+
+        db = tmp_path / "legacy.db"
+        conn = sqlite3.connect(db)
+        conn.enable_load_extension(True)
+        sqlite_vec.load(conn)
+        conn.enable_load_extension(False)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.executescript(
+            """
+            CREATE TABLE chunks (
+                id TEXT PRIMARY KEY, source_type TEXT NOT NULL, file_path TEXT NOT NULL,
+                url TEXT, header_path TEXT, content TEXT NOT NULL, mtime REAL NOT NULL,
+                chunk_index INTEGER NOT NULL, metadata_json TEXT DEFAULT '{}');
+            CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT);
+            """
+        )
+        conn.execute(
+            f"CREATE VIRTUAL TABLE chunk_embeddings USING vec0("
+            f"chunk_id TEXT PRIMARY KEY, embedding FLOAT[{DIMS}])"
+        )
+        conn.execute("INSERT INTO metadata VALUES('embedding_dims', ?)", (str(DIMS),))
+        conn.execute(
+            "INSERT INTO chunks VALUES('legacy','markdown','/v/a.md',"
+            "NULL,NULL,'legacy body',1.0,0,'{}')"
+        )
+        conn.commit()
+        conn.close()
+
+        store = VectorStore(db)
+        store.initialize(dims=DIMS)
+        assert store._conn_().execute("PRAGMA journal_mode").fetchone()[0] == "delete"
+        store.upsert_chunks([self._chunk("fresh")], np.ones((1, DIMS), dtype=np.float32))
+
+        rows = store._conn_().execute("SELECT id FROM chunks ORDER BY id").fetchall()
+        assert [r[0] for r in rows] == ["fresh", "legacy"]
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["legacy.db"]
+        store.close()
