@@ -11,7 +11,7 @@ from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 
 from obsidian_search.config import Settings, VaultPathError
-from obsidian_search.ingestion.pipeline import IndexingPipeline
+from obsidian_search.ingestion.pipeline import IndexingPipeline, iter_vault_files
 from obsidian_search.models import IngestResult
 
 
@@ -174,9 +174,9 @@ def create_ingest_router(pipeline: IndexingPipeline, settings: Settings) -> APIR
 
         def _run() -> None:
             try:
-                md_files = list(settings.vault_path.rglob("*.md"))
-                job.files_total = len(md_files)
-                for path in md_files:
+                files = list(iter_vault_files(settings))
+                job.files_total = len(files)
+                for path in files:
                     if stop.is_set():
                         job.status = "cancelled"
                         return

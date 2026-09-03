@@ -129,10 +129,10 @@ def main() -> None:
     settings.db_dir.mkdir(parents=True, exist_ok=True)
 
     embedder = Embedder(model_name=settings.embedding_model, device=settings.device)
-    embedder._load()
+    embedder.load()
 
     store = VectorStore(settings.db_path)
-    store.initialize(dims=embedder.dims)
+    store.initialize(dims=embedder.dims, profile=embedder.profile)
 
     app = create_app(settings=settings, store=store, embedder=embedder, start_watcher=True)
 
