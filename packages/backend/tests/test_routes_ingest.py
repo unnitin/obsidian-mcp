@@ -284,3 +284,56 @@ class TestReindexRoute:
             time.sleep(0.1)
         assert resp.json()["status"] == "completed"
         store.close()
+
+
+class TestReindexJobIsolation:
+    """Reindex jobs belong to one app, not to the process."""
+
+    def test_job_from_one_app_is_unknown_to_another(self, tmp_path: Path) -> None:
+        client_a, store_a = _make_client(tmp_path)
+        job_id = client_a.post("/reindex").json()["job_id"]
+        assert client_a.get(f"/reindex/{job_id}").status_code == 200
+
+        other_vault = tmp_path / "other"
+        other_vault.mkdir()
+        client_b, store_b = _make_client(other_vault)
+        assert client_b.get(f"/reindex/{job_id}").status_code == 404
+        store_a.close()
+        store_b.close()
+
+    def test_finished_jobs_are_evicted_past_the_cap(self, tmp_path: Path) -> None:
+        from obsidian_search.api.routes_ingest import ReindexJobs
+
+        jobs = ReindexJobs()
+        created = []
+        for _ in range(ReindexJobs.MAX_COMPLETED + 5):
+            job, _stop = jobs.create()
+            job.status = "completed"
+            created.append(job.job_id)
+
+        # The most recent job is still registered; the oldest have gone.
+        assert jobs.get(created[-1]) is not None
+        assert jobs.get(created[0]) is None
+
+    def test_running_jobs_are_never_evicted(self, tmp_path: Path) -> None:
+        from obsidian_search.api.routes_ingest import ReindexJobs
+
+        jobs = ReindexJobs()
+        running, _ = jobs.create()
+        for _ in range(ReindexJobs.MAX_COMPLETED + 5):
+            job, _stop = jobs.create()
+            job.status = "completed"
+        assert jobs.get(running.job_id) is not None
+
+    def test_cancel_sets_the_stop_event(self, tmp_path: Path) -> None:
+        from obsidian_search.api.routes_ingest import ReindexJobs
+
+        jobs = ReindexJobs()
+        job, stop = jobs.create()
+        jobs.request_stop(job.job_id)
+        assert stop.is_set()
+
+    def test_stop_on_unknown_job_is_a_no_op(self, tmp_path: Path) -> None:
+        from obsidian_search.api.routes_ingest import ReindexJobs
+
+        ReindexJobs().request_stop("no-such-job")

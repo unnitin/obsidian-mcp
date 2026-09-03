@@ -150,6 +150,44 @@ class TestEmbedderSearcher:
         assert e._model is None
 
 
+class TestDeviceConfiguration:
+    """One device setting, honoured by both models."""
+
+    def test_default_device_is_cpu(self) -> None:
+        assert Embedder().device == "cpu"
+
+    def test_device_is_passed_to_sentence_transformer(self) -> None:
+        e = Embedder(model_name="fake-model", device="cuda")
+        with patch(
+            "sentence_transformers.SentenceTransformer", return_value=_mock_model()
+        ) as MockST:
+            e._load()
+        assert MockST.call_args.kwargs["device"] == "cuda"
+
+    def test_reranker_default_device_is_cpu(self) -> None:
+        from obsidian_search.search.reranker import Reranker
+
+        assert Reranker(model_name="fake-reranker").device == "cpu"
+
+    def test_reranker_does_not_choose_mps_itself(self) -> None:
+        """Regression: the reranker used to pick MPS regardless of settings,
+        undoing the CPU default the embedder deliberately uses."""
+        from obsidian_search.search.reranker import Reranker
+
+        r = Reranker(model_name="fake-reranker")
+        with patch("sentence_transformers.CrossEncoder", return_value=MagicMock()) as MockCE:
+            r._load()
+        assert MockCE.call_args.kwargs["device"] == "cpu"
+
+    def test_reranker_honours_an_explicit_device(self) -> None:
+        from obsidian_search.search.reranker import Reranker
+
+        r = Reranker(model_name="fake-reranker", device="mps")
+        with patch("sentence_transformers.CrossEncoder", return_value=MagicMock()) as MockCE:
+            r._load()
+        assert MockCE.call_args.kwargs["device"] == "mps"
+
+
 class TestTaskPrefixes:
     """Prefix conventions are per-model and must not leak across models."""
 

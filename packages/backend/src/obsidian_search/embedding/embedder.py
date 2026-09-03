@@ -55,8 +55,9 @@ class Embedder:
     # Class-level default so tests that bypass __init__ still encode sanely.
     prefixes: TaskPrefixes = _NO_PREFIXES
 
-    def __init__(self, model_name: str = "BAAI/bge-small-en-v1.5") -> None:
+    def __init__(self, model_name: str = "BAAI/bge-small-en-v1.5", device: str = "cpu") -> None:
         self.model_name = model_name
+        self.device = device
         self.dims: int = 0  # set from actual model after load()
         self.prefixes = prefixes_for(model_name)
         self._model: Any = None
@@ -79,16 +80,10 @@ class Embedder:
         if self._model is None:
             from sentence_transformers import SentenceTransformer
 
-            # CPU is intentional: bge-small is fast enough on CPU for single-query
-            # workloads, and avoids ~1 GB of permanent MPS address-space overhead
-            # on Apple Silicon (unified memory maps model weights into both CPU and
-            # GPU space when using MPS).
-            device = "cpu"
-
             self._model = SentenceTransformer(
                 self.model_name,
                 trust_remote_code=self.model_name in _TRUST_REMOTE_CODE_MODELS,
-                device=device,
+                device=self.device,
             )
             self.dims = self._model.get_sentence_embedding_dimension()
         return self._model

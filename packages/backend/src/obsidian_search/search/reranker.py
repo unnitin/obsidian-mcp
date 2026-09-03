@@ -18,20 +18,21 @@ class Reranker:
 
     Scores (query, passage) pairs so that the most relevant passages bubble
     to the top.  The model is downloaded once and cached by sentence-transformers.
-    On Apple Silicon the MPS backend is used automatically.
+    Runs on Settings.device, the same device as the embedder — it used to pick
+    MPS on its own, which reintroduced the ~1 GB of address-space overhead the
+    embedder is deliberately configured to avoid.
     """
 
-    def __init__(self, model_name: str) -> None:
+    def __init__(self, model_name: str, device: str = "cpu") -> None:
         self.model_name = model_name
+        self.device = device
         self._model: Any = None
 
     def _load(self) -> Any:  # noqa: ANN401
         if self._model is None:
-            import torch
             from sentence_transformers import CrossEncoder
 
-            device = "mps" if torch.backends.mps.is_available() else "cpu"
-            self._model = CrossEncoder(self.model_name, device=device)
+            self._model = CrossEncoder(self.model_name, device=self.device)
         return self._model
 
     def rerank(

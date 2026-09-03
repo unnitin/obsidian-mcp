@@ -6,6 +6,7 @@ import json
 import sqlite3
 import struct
 import threading
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -65,7 +66,11 @@ class VectorStore:
 
     @contextmanager
     def _write_txn(self) -> Iterator[sqlite3.Connection]:
-        """Hold the write lock for one IMMEDIATE transaction; commit or roll back."""
+        """Hold the write lock for one IMMEDIATE transaction; commit or roll back.
+
+        Stamps ``last_indexed_at`` on the way out, so the recorded time is when
+        the index actually changed.
+        """
         with self._write_lock:
             conn = self._conn_()
             conn.execute("BEGIN IMMEDIATE")
@@ -74,6 +79,10 @@ class VectorStore:
             except BaseException:
                 conn.rollback()
                 raise
+            conn.execute(
+                "INSERT OR REPLACE INTO metadata(key, value) VALUES('last_indexed_at', ?)",
+                (repr(time.time()),),
+            )
             conn.commit()
 
     # ── Schema ────────────────────────────────────────────────────────────────
@@ -222,8 +231,46 @@ class VectorStore:
         source_types: list[str] | None = None,
         tags: list[str] | None = None,
     ) -> list[tuple[Chunk, float]]:
+        """Return the *top_k* nearest chunks matching the filters, closest first.
+
+        sqlite-vec applies its ``k`` inside the ANN index, before we can see
+        source type or tags, so filtering can only happen after retrieval. A
+        fixed candidate count therefore under-returns whenever the filtered
+        subset is rare: ask for PDFs when the 250 nearest chunks are all
+        markdown and you get nothing, even with a vault full of matching PDFs.
+
+        When filters are present we widen ``k`` until either enough survive or
+        the whole table has been considered, so a filtered search returns what
+        it should — at the cost of extra passes for a narrow filter.
+        """
         conn = self._conn_()
-        candidates = min(top_k * 5, 500)
+        filtered = bool(source_types or tags)
+        k = min(top_k * 5, 500)
+        total: int | None = None
+        results: list[tuple[Chunk, float]] = []
+
+        while True:
+            results = self._nearest(conn, query_vector, k, source_types, tags)
+            if len(results) >= top_k or not filtered:
+                break
+            if total is None:
+                total = int(conn.execute("SELECT COUNT(*) FROM chunk_embeddings").fetchone()[0])
+            if k >= total:
+                break
+            k = min(k * 4, total)
+
+        results.sort(key=lambda x: x[1])
+        return results[:top_k]
+
+    def _nearest(
+        self,
+        conn: sqlite3.Connection,
+        query_vector: np.ndarray,
+        k: int,
+        source_types: list[str] | None,
+        tags: list[str] | None,
+    ) -> list[tuple[Chunk, float]]:
+        """One ANN pass at *k*, hydrated into Chunks and filtered."""
         dist_map: dict[str, float] = {
             r[0]: float(r[1])
             for r in conn.execute(
@@ -232,7 +279,7 @@ class VectorStore:
                    WHERE ce.embedding MATCH ?
                      AND ce.k = ?
                    ORDER BY ce.distance""",
-                (_pack(query_vector), candidates),
+                (_pack(query_vector), k),
             )
         }
 
@@ -270,21 +317,35 @@ class VectorStore:
             )
             results.append((chunk, dist_map[chunk.id]))
 
-        results.sort(key=lambda x: x[1])
-        return results[:top_k]
+        return results
 
     def stats(self) -> dict[str, Any]:
         conn = self._conn_()
         total_chunks: int = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
         total_docs: int = conn.execute("SELECT COUNT(DISTINCT file_path) FROM chunks").fetchone()[0]
-        last_mtime = conn.execute("SELECT MAX(mtime) FROM chunks").fetchone()[0]
         size = self.db_path.stat().st_size if self.db_path.exists() else 0
         return {
             "total_chunks": total_chunks,
             "total_documents": total_docs,
-            "last_indexed_at": last_mtime,
+            "last_indexed_at": self.last_indexed_at(),
             "index_size_bytes": size,
         }
+
+    def last_indexed_at(self) -> float | None:
+        """When the index last changed, as an epoch timestamp.
+
+        None for an index written before this was recorded — previously this
+        reported MAX(mtime), the newest *note's* modification time, so /status
+        looked fresh whenever a note was recently edited even if indexing had
+        not run for days. Better to admit not knowing than to report a number
+        that means something else.
+        """
+        row = (
+            self._conn_()
+            .execute("SELECT value FROM metadata WHERE key = 'last_indexed_at'")
+            .fetchone()
+        )
+        return float(row[0]) if row is not None else None
 
     def close(self) -> None:
         with self._write_lock:

@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git checkout:*)",
+      "Bash(uv run:*)",
+      "Bash(/Users/nsrivas3/Documents/obsidian-mcp/.venv/bin/ruff check:*)",
+      "Bash(/Users/nsrivas3/Documents/obsidian-mcp/.venv/bin/pytest packages/backend/tests/ --ignore=packages/backend/tests/integration -q --cov=packages/backend/src --cov-fail-under=80 --tb=short)",
+      "Bash(.venv/bin/ruff format:*)",
+      "Bash(.venv/bin/pytest packages/backend/tests/ -x -q)",
+      "Read(//private/tmp/**)"
+    ]
+  }
+}

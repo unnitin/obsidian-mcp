@@ -1542,7 +1542,7 @@ wheels = [
 
 [[package]]
 name = "obsidian-search"
-version = "0.3.0"
+version = "0.4.7"
 source = { editable = "packages/backend" }
 dependencies = [
     { name = "einops" },
