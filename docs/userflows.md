@@ -192,7 +192,7 @@ flowchart TD
     B -->|"PDF"| D["pymupdf4llm.to_markdown()<br/>Preserves tables, columns,<br/>infers headings from font size"]
     B -->|"URL"| E["httpx.get(url)<br/>trafilatura.extract(html)"]
 
-    C --> F["markdown-it-py<br/>Parse token stream"]
+    C --> F["Header/block scanner<br/>ATX regex + fence tracking"]
     D --> F
     E --> F
 

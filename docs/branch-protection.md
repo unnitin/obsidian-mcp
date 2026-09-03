@@ -1,41 +1,78 @@
 # Branch Protection Setup
 
-After pushing CI workflows, configure GitHub to block merges that fail tests.
+## What is actually configured
 
-## Steps
+This repo is protected by a **ruleset** (Settings → Rules → Rulesets), not by
+the classic per-branch rules this guide originally described. The live ruleset
+is named `main` and its conditions include both `~DEFAULT_BRANCH` and `~ALL`,
+so it applies to **every branch**, not just `main`.
 
-1. Go to **Settings → Branches** in the GitHub repo
-2. Click **Add branch protection rule**
-3. Branch name pattern: `main`
-4. Enable the following:
+| Rule | Effect |
+|------|--------|
+| `pull_request` | PR required, with **1 approving review** |
+| `required_signatures` | Every commit must carry a verified signature |
+| `creation` | Branch creation restricted |
+| `deletion` | Branch deletion blocked |
+| `non_fast_forward` | Force-pushes blocked |
 
-| Setting | Value |
-|---------|-------|
-| Require a pull request before merging | ✅ |
-| Require approvals | 1 (or 0 for solo projects) |
-| Require status checks to pass before merging | ✅ |
-| Require branches to be up to date before merging | ✅ |
-| Do not allow bypassing the above settings | ✅ |
+Two consequences worth knowing before you wonder why a merge is blocked:
 
-5. Under **Status checks that are required**, search for and add:
-   - `All checks passed`
+- **There is no required status check.** CI runs and the `All checks passed`
+  job reports, but nothing blocks a merge on it — see *Making CI a real gate*
+  below.
+- **`required_signatures` applies to all branches**, so unsigned commits are
+  refused on feature branches too. If you have not set up signing, pushes
+  succeed only because an admin bypass is applied, and every merge needs
+  `gh pr merge --admin`.
 
-   This single job gates on lint + typecheck + tests all passing.
-   You do **not** need to add `lint`, `typecheck`, or `Tests` individually.
+## Commit signing
 
-6. Click **Save changes**
+Because `required_signatures` is active, configure signing before you start
+work rather than discovering it at merge time. SSH signing is the least
+ceremony:
 
-## What runs on each PR to main
+```bash
+git config --global gpg.format ssh
+git config --global user.signingkey ~/.ssh/id_ed25519.pub
+git config --global commit.gpgsign true
+```
+
+Then add that key as a **signing key** (not just an auth key) at
+<https://github.com/settings/keys>. Verify with `git log --format='%h %G?'` —
+`G` means a good signature, `N` means none.
+
+Re-signing existing commits means rewriting history (`git rebase --exec 'git
+commit --amend --no-edit -S'`) and force-pushing, which the `non_fast_forward`
+rule blocks without a bypass. Cheaper to sign from the start.
+
+## Making CI a real gate
+
+CI currently passes decoratively. To have it block merges, add a
+`required_status_checks` rule to the ruleset with the single check:
+
+- `All checks passed`
+
+That one job depends on lint, typecheck, and tests, so you do **not** need to
+add `Lint & Format`, `Type Check`, or `Tests` individually.
+
+Note the check only appears in the picker after it has run at least once on
+the default branch.
+
+## What runs on each PR
+
+CI triggers on **every** pull request regardless of its base branch. It was
+previously filtered to PRs targeting `main`, which meant a PR stacked on
+another PR's branch got no checks at all.
 
 ```
-pull_request → main
+pull_request (any base)
 │
 ├── lint          ruff check + ruff format --check
 ├── typecheck     mypy strict
 ├── test          pytest + coverage ≥ 80%
 │
-└── all-checks-passed  ← required status check
-    (depends on all three; blocks merge if any fail)
+└── all-checks-passed  ← the job to require (not yet required)
+    (depends on all three; fails if any fail)
 ```
 
 ## Coverage threshold

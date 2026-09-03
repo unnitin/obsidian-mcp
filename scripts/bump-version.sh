@@ -26,8 +26,14 @@ sed -i.bak "s/^version = \".*\"/version = \"${VERSION}\"/" "$PYPROJECT"
 rm -f "${PYPROJECT}.bak"
 echo "    packages/backend/pyproject.toml"
 
+# pyproject.toml is the single source of truth: the package exports
+# __version__ from installed metadata and the FastAPI app reads that, so
+# there is no second place to keep in step.
+
 echo ""
-echo "==> Done. Verify, then commit and tag:"
+echo "==> Next: move the CHANGELOG's [Unreleased] section under [${VERSION}]."
+echo ""
+echo "==> Then verify, commit and tag:"
 echo "    git add -p"
 echo "    git commit -m \"chore: bump version to v${VERSION}\""
 echo "    git tag v${VERSION}"
