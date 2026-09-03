@@ -132,7 +132,10 @@ CREATE VIRTUAL TABLE chunk_embeddings USING vec0(
 
 ### Markdown (Obsidian notes)
 1. Strip YAML frontmatter with `python-frontmatter` (store as metadata)
-2. Parse header hierarchy with `markdown-it-py` token stream
+2. Parse header hierarchy by walking lines with an ATX-header regex, tracking
+   fenced code blocks so `#` inside a fence is not treated as a heading
+   *(the plan called for a `markdown-it-py` token stream; the implementation
+   is hand-rolled and the dependency was never used)*
 3. Per header section: build breadcrumb `"Title > Section > Sub"`
 4. Detect special block types before size-based splitting:
    - **Tables** (`| col |` lines): kept atomic; if >512 tokens split on row boundaries repeating header row; metadata `chunk_type=table`
@@ -265,7 +268,6 @@ disk (see below).
 | `sqlite-vec` | Vector store (ANN search in SQLite) |
 | `pymupdf4llm` | PDF → structured Markdown |
 | `trafilatura` | Web page content extraction |
-| `markdown-it-py` | Markdown token stream for header chunking |
 | `python-frontmatter` | Parse Obsidian YAML frontmatter |
 | `httpx` | Async HTTP client |
 | `fastapi` + `uvicorn` | API server |

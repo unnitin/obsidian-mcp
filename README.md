@@ -406,7 +406,7 @@ All settings can be set via environment variables or a `.env` file in the projec
 | Vector store | `sqlite-vec` — single-file, iCloud-safe |
 | PDF parsing | `pymupdf4llm` |
 | Web extraction | `trafilatura` + `httpx` |
-| Markdown parsing | `markdown-it-py` + `python-frontmatter` |
+| Markdown parsing | hand-rolled header/block chunker + `python-frontmatter` for YAML |
 | API server | `fastapi` + `uvicorn` |
 | MCP server | `fastmcp` (stdio transport) |
 | File watcher | `watchdog` (FSEvents on macOS) |

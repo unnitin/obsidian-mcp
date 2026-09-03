@@ -11,6 +11,7 @@ from typing import Annotated, Any
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
+from obsidian_search import __version__
 from obsidian_search.config import Settings
 from obsidian_search.embedding.embedder import Embedder
 from obsidian_search.ingestion.pipeline import IndexingPipeline
@@ -100,7 +101,7 @@ def create_app(
 
     # No CORS middleware: the HTTP API has no browser client. It exists for
     # local scripts and the MCP process, which are not subject to CORS.
-    app = FastAPI(title="obsidian-search", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="obsidian-search", version=__version__, lifespan=lifespan)
 
     reranker = (
         Reranker(model_name=settings.reranker_model, device=settings.device)
