@@ -1,6 +1,6 @@
 # User Flows
 
-Seven Mermaid diagrams covering every interaction path in the system.
+Mermaid diagrams covering every interaction path in the system.
 
 ---
 
@@ -14,28 +14,29 @@ graph LR
         Notes["📝 Notes/*.md"]
         PDFs["📄 PDFs"]
         DB[".obsidian-search/<br/>semantic-search.db<br/>(sqlite-vec)"]
-        Plugin[".obsidian/plugins/<br/>obsidian-semantic-search/<br/>main.js"]
     end
 
     subgraph Backend ["🐍 Python Backend (local process)"]
         API["FastAPI<br/>port 51234"]
         MCP_SRV["FastMCP Server<br/>(stdio)"]
-        Embedder["nomic-embed-text-v1.5<br/>(sentence-transformers)"]
+        Embedder["bge-small-en-v1.5<br/>(sentence-transformers)"]
         Watcher["watchdog<br/>FSEventsObserver"]
     end
 
     subgraph Clients ["Clients"]
-        Obsidian["Obsidian App"]
+        Obsidian["Obsidian App<br/>(edits files on disk)"]
         Claude["Claude Desktop"]
         LLMs["Other LLMs via MCP"]
+        Scripts["Local scripts<br/>(optional)"]
     end
 
-    Obsidian --> Plugin
-    Plugin -->|"HTTP POST /search"| API
+    Obsidian --> Notes
+    Scripts -->|"HTTP"| API
     Claude -->|"stdio MCP"| MCP_SRV
     LLMs -->|"stdio MCP"| MCP_SRV
     API --> Embedder
     MCP_SRV --> Embedder
+    MCP_SRV -->|"create / append notes"| Notes
     Embedder --> DB
     Watcher -->|"monitors"| Notes
     Watcher -->|"triggers reindex"| API
@@ -45,91 +46,55 @@ graph LR
 
 ---
 
-## 2. Obsidian Plugin — Search Flow
+## 2. Claude — Vault Write Flow
 
-User searches from inside Obsidian via the plugin.
-
-```mermaid
-sequenceDiagram
-    actor User
-    participant Obsidian as Obsidian App
-    participant Plugin as Semantic Search Plugin
-    participant API as FastAPI Server
-    participant Embed as Embedder
-    participant DB as sqlite-vec
-    participant Rerank as CrossEncoder Reranker
-
-    User->>Obsidian: Cmd+Shift+F
-    Obsidian->>Plugin: Open SemanticSearchModal
-
-    loop User types query
-        User->>Plugin: Keystroke
-        Note over Plugin: 300ms debounce resets
-    end
-
-    Plugin->>API: POST /search {query, top_k=10}
-    API->>Embed: encode("search_query: " + query)
-    Embed-->>API: float32[768]
-    API->>DB: ANN search top-50
-    DB-->>API: candidate chunks + distances
-    API->>Rerank: CrossEncoder(query, chunks)
-    Rerank-->>API: reranked scores
-    API-->>Plugin: SearchResult[] top 10
-
-    Plugin->>Obsidian: Render results in modal
-
-    alt User clicks a note result
-        User->>Plugin: Click result
-        Plugin->>Obsidian: openLinkText(file_path)
-        Obsidian->>User: Opens note scrolled to heading
-    else User clicks a web or PDF result
-        User->>Plugin: Click result
-        Plugin->>Obsidian: Show preview panel with chunk content
-    end
-```
-
----
-
-## 3. Obsidian Plugin — URL & PDF Ingestion Flow
-
-User clips a web page or indexes a PDF from inside Obsidian.
+Claude creates a new note or appends to an existing one. Writes are additive:
+`create_note` refuses to touch an existing file and `append_to_note` refuses to
+create one, so no tool call can destroy existing writing.
 
 ```mermaid
 sequenceDiagram
     actor User
-    participant Obsidian as Obsidian App
-    participant Plugin as Semantic Search Plugin
-    participant API as FastAPI Server
-    participant Fetch as httpx + trafilatura
+    participant Claude as Claude Desktop
+    participant MCP as FastMCP Server
+    participant Writer as VaultWriter
+    participant Vault as Obsidian Vault
     participant Pipeline as Indexing Pipeline
-    participant DB as sqlite-vec
+    participant Watcher as File Watcher
 
-    alt Clip URL from clipboard
-        User->>Obsidian: Cmd+P — Index URL from clipboard
-        Plugin->>Plugin: navigator.clipboard.readText()
-        Plugin->>API: POST /ingest/url {url, tags}
-        API->>Fetch: httpx.get(url)
-        Fetch-->>API: HTML
-        API->>Fetch: trafilatura.extract(html)
-        Fetch-->>API: clean text + title
-    else Index a PDF file
-        User->>Obsidian: Cmd+P — Index PDF file
-        Plugin->>Obsidian: Open file picker
-        User->>Plugin: Select PDF
-        Plugin->>API: POST /ingest/pdf {file_path}
-        API->>API: pymupdf4llm.to_markdown(path)
+    alt Create a new note
+        User->>Claude: Start a note for the migration plan
+        Claude->>MCP: create_note("Projects/migration.md", content)
+        MCP->>Writer: create_note(...)
+        Writer->>Writer: resolve_in_vault() — reject escapes
+        Writer->>Writer: markdown-only + system-folder check
+        Writer->>Vault: open(path, "x") — fails if it exists
+        Vault-->>Writer: written
+    else Append to an existing note
+        User->>Claude: Add today's standup to my weekly log
+        Claude->>MCP: search_notes("weekly log") to find the real path
+        MCP-->>Claude: file_path
+        Claude->>MCP: append_to_note(file_path, content)
+        MCP->>Writer: append_to_note(...)
+        Writer->>Vault: open(path, "a") — fails if missing
+        Vault-->>Writer: appended
     end
 
-    API->>Pipeline: chunk → embed → store
-    Pipeline->>DB: INSERT chunks + embeddings
-    DB-->>API: chunks_added: N
-    API-->>Plugin: IngestResult
-    Plugin->>Obsidian: Notice "Indexed N chunks from source"
+    Writer->>Pipeline: index_file(path)
+    Pipeline-->>Writer: chunks_added
+    Note over Writer,Pipeline: Indexed inline so the note is<br/>searchable immediately
+    Writer-->>MCP: WriteResult
+    MCP-->>Claude: file_path, action, bytes_written, chunks_indexed
+    Claude->>User: Confirmation with the path written
+
+    Vault-->>Watcher: FSEvent (debounced 2s)
+    Watcher->>Pipeline: index_file(path)
+    Note over Watcher,Pipeline: No-op — mtime already<br/>matches the stored value
 ```
 
 ---
 
-## 4. Claude — MCP Query Flow
+## 3. Claude — MCP Query Flow
 
 User asks Claude a question; Claude searches the vault autonomously.
 
@@ -146,12 +111,15 @@ sequenceDiagram
     User->>Claude: What did I write about quantum computing?
 
     Claude->>MCP: search_notes(query, top_k=10)
-    MCP->>Embed: encode("search_query: quantum computing")
-    Embed-->>MCP: float32[768]
+    MCP->>Embed: encode(query with task prefix)
+    Embed-->>MCP: float32[384]
     MCP->>DB: ANN search top-50
     DB-->>MCP: candidates
-    MCP->>Rerank: rerank candidates
-    Rerank-->>MCP: top 10 SearchResult[]
+    opt reranker enabled
+        MCP->>Rerank: rerank candidates
+        Rerank-->>MCP: reordered
+    end
+    MCP-->>MCP: top 10 SearchResult[]
     MCP-->>Claude: results with file_path + header_path + excerpt
 
     Claude->>MCP: get_note_content("Physics/Quantum.md")
@@ -164,7 +132,7 @@ sequenceDiagram
 
 ---
 
-## 5. Claude — Ingestion & Index Management Flow
+## 4. Claude — Ingestion & Index Management Flow
 
 User asks Claude to index new content or manage the index.
 
@@ -212,7 +180,7 @@ sequenceDiagram
 
 ---
 
-## 6. Indexing Pipeline — Content Processing
+## 5. Indexing Pipeline — Content Processing
 
 How any source flows through chunking and storage.
 
@@ -260,9 +228,11 @@ flowchart TD
 
 ---
 
-## 7. File Watcher — Incremental Reindex Flow
+## 6. File Watcher — Incremental Reindex Flow
 
-How vault changes trigger automatic reindexing.
+How vault changes trigger automatic reindexing. Obsidian is an ordinary editor
+here — it saves files to disk and the watcher notices; nothing is installed into
+Obsidian itself.
 
 ```mermaid
 flowchart TD
@@ -272,7 +242,7 @@ flowchart TD
     B -->|"on_deleted"| D["Remove from index<br/>DELETE WHERE file_path = ?"]
     B -->|"on_moved"| E["Remove old path<br/>Schedule index new path"]
 
-    C -->|".md"| F{In ignored path?}
+    C -->|".md or .pdf"| F{In ignored path?}
     C -->|"other"| G(["Ignore"])
 
     F -->|".obsidian or excluded folders"| G
@@ -283,7 +253,7 @@ flowchart TD
     J --> K(["Index updated ✓"])
 
     subgraph Startup ["On Backend Startup"]
-        S1["Walk vault for all .md files"] --> S2["Compare mtime vs DB"]
+        S1["Walk vault for all .md / .pdf files"] --> S2["Compare mtime vs DB"]
         S2 --> S3{Changed?}
         S3 -->|"New or Modified"| S4["Queue for indexing"]
         S3 -->|"Deleted"| S5["Remove from DB"]

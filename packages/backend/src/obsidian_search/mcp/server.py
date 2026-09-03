@@ -124,6 +124,25 @@ def _build_mcp_server(
         return result.model_dump()
 
     @mcp.tool()
+    def index_note(file_path: str) -> dict[str, Any]:
+        """Index or re-index a single markdown note in the vault.
+
+        The backend watches the vault and indexes saved notes automatically, so
+        this is only needed to force a refresh — for example right after an
+        external tool wrote the file.
+
+        Args:
+            file_path: Vault-relative or absolute path to a .md file.
+
+        Returns:
+            Ingest result with chunks_added and status. Status is "ok" when the
+            note was indexed or already up to date, "unsupported" for a
+            non-markdown file, and "not_found" if it does not exist.
+        """
+        result = pipeline.index_file(settings.resolve_in_vault(file_path))
+        return result.model_dump()
+
+    @mcp.tool()
     def get_index_status() -> dict[str, Any]:
         """Return current index statistics.
 

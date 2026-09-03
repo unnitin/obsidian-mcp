@@ -9,7 +9,6 @@ from contextlib import asynccontextmanager
 from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
-from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from obsidian_search.config import Settings
@@ -99,14 +98,9 @@ def create_app(
             watcher.stop()
         store.close()
 
+    # No CORS middleware: the HTTP API has no browser client. It exists for
+    # local scripts and the MCP process, which are not subject to CORS.
     app = FastAPI(title="obsidian-search", version="0.1.0", lifespan=lifespan)
-
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["app://obsidian.md", "http://localhost:51234"],
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
 
     reranker = (
         Reranker(model_name=settings.reranker_model, device=settings.device)

@@ -18,25 +18,13 @@ fi
 # Strip leading 'v' if provided
 VERSION="${VERSION#v}"
 
-echo "==> Bumping all packages to v${VERSION}"
+echo "==> Bumping backend to v${VERSION}"
 
 # ── Python backend (pyproject.toml) ───────────────────────────────────────────
 PYPROJECT="$REPO_ROOT/packages/backend/pyproject.toml"
 sed -i.bak "s/^version = \".*\"/version = \"${VERSION}\"/" "$PYPROJECT"
 rm -f "${PYPROJECT}.bak"
 echo "    packages/backend/pyproject.toml"
-
-# ── Obsidian plugin (package.json) ────────────────────────────────────────────
-PACKAGE_JSON="$REPO_ROOT/packages/obsidian-plugin/package.json"
-sed -i.bak "s/\"version\": \".*\"/\"version\": \"${VERSION}\"/" "$PACKAGE_JSON"
-rm -f "${PACKAGE_JSON}.bak"
-echo "    packages/obsidian-plugin/package.json"
-
-# ── Obsidian plugin manifest (manifest.json) ──────────────────────────────────
-MANIFEST="$REPO_ROOT/packages/obsidian-plugin/manifest.json"
-sed -i.bak "s/\"version\": \".*\"/\"version\": \"${VERSION}\"/" "$MANIFEST"
-rm -f "${MANIFEST}.bak"
-echo "    packages/obsidian-plugin/manifest.json"
 
 echo ""
 echo "==> Done. Verify, then commit and tag:"
