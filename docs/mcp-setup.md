@@ -64,11 +64,19 @@ Once connected, Claude can use these tools in any conversation:
 |------|-------------|
 | `search_notes` | Semantic search across all indexed notes, PDFs, and web pages |
 | `get_note_content` | Read the full text of any note by path |
+| `create_note` | Create a new markdown note and index it — fails if the file exists |
+| `append_to_note` | Append to an existing note and reindex it — fails if it does not exist |
 | `index_url` | Fetch a web page and add it to the search index |
 | `index_pdf` | Index a PDF file by absolute path |
+| `index_note` | Force a re-index of a single markdown note |
 | `get_index_status` | Check how many chunks/documents are indexed |
 | `list_indexed_files` | List all indexed documents with chunk counts |
-| `remove_from_index` | Remove a document from the index |
+| `remove_from_index` | Remove a document from the index (the file on disk is left alone) |
+
+Every path argument is confined to the vault: relative paths resolve against
+the vault root, and anything resolving outside it is refused. Writes are
+additive only — no tool can overwrite, move, or delete a note, so the worst a
+mistaken call can do is leave a stray new one.
 
 ---
 
@@ -80,6 +88,10 @@ Search my notes for anything about async Python programming.
 What did I write about compound interest and index funds?
 
 Index this article for me: https://example.com/article
+
+Start a note in Projects/ for the migration plan.
+
+Add today's standup notes to my weekly log.
 
 How many notes do I have indexed?
 ```
@@ -115,10 +127,10 @@ Then update the config:
 **Model download on first use**
 
 The first time Claude invokes `search_notes`, the embedding model downloads
-(~274 MB).  Subsequent calls are fast.  If you want to pre-download it:
+(~130 MB).  Subsequent calls are fast.  If you want to pre-download it:
 ```bash
 cd /path/to/obsidian-mcp/packages/backend
-uv run python -c "from obsidian_search.embedding.embedder import Embedder; Embedder()._load()"
+uv run python -c "from obsidian_search.embedding.embedder import Embedder; Embedder().load()"
 ```
 
 ---

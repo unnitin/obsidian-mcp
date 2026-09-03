@@ -23,7 +23,7 @@ bash scripts/install.sh
 VAULT_PATH="/path/to/your/vault" bash scripts/start-backend.sh
 ```
 
-The first run downloads the embedding model (~274 MB, one-time). The server
+The first run downloads the embedding model (~130 MB, one-time). The server
 listens at `http://127.0.0.1:51234` and automatically indexes your vault.
 
 ---
@@ -160,6 +160,12 @@ with this content (replace `yourname` and `YourVaultName`):
     <string>/Users/yourname</string>
     <key>OBSIDIAN_SEARCH_HOST</key>
     <string>0.0.0.0</string>
+    <!-- Required: listening beyond loopback without a token would expose note
+         contents and file indexing to the whole network, so the server exits
+         at startup if this is missing. Generate one with:
+         python -c 'import secrets; print(secrets.token_urlsafe(32))' -->
+    <key>OBSIDIAN_SEARCH_API_TOKEN</key>
+    <string>paste-your-generated-token-here</string>
   </dict>
 
   <key>RunAtLoad</key>
@@ -232,6 +238,10 @@ Alternatively, run Claude Desktop on the Mac mini directly and keep the MCP conf
 From any Mac on your network:
 
 ```bash
+# /health is the only unauthenticated route
 curl http://192.168.1.42:51234/health
-curl http://192.168.1.42:51234/status
+
+# everything else needs the token from the plist
+curl -H "Authorization: Bearer $OBSIDIAN_SEARCH_API_TOKEN" \
+  http://192.168.1.42:51234/status
 ```
