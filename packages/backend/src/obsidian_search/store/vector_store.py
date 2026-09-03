@@ -57,6 +57,10 @@ class VectorStore:
                     conn.enable_load_extension(False)
                     conn.execute("PRAGMA journal_mode=WAL")
                     conn.execute("PRAGMA synchronous=NORMAL")
+                    # The API and MCP processes can both hold the DB open, so a
+                    # writer must wait for the other's transaction rather than
+                    # failing immediately with "database is locked".
+                    conn.execute("PRAGMA busy_timeout=10000")
                     self._conn = conn
         return self._conn
 
@@ -83,13 +87,24 @@ class VectorStore:
 
     # ── Schema ────────────────────────────────────────────────────────────────
 
-    def initialize(self, dims: int) -> None:
+    def initialize(self, dims: int, profile: str | None = None) -> None:
+        """Create the schema and verify the index matches the current embedder.
+
+        Args:
+            dims: Vector dimensionality of the current embedding model.
+            profile: Identity of the embedder (model plus task-prefix
+                convention). Stored on first use and compared on every later
+                open, so changing either invalidates the index loudly instead
+                of silently mixing incompatible vectors.
+        """
         self._dims = dims
         with self._write_lock:
             conn = self._conn_()
-            self._create_schema(conn, dims)
+            self._create_schema(conn, dims, profile)
 
-    def _create_schema(self, conn: sqlite3.Connection, dims: int) -> None:
+    def _create_schema(
+        self, conn: sqlite3.Connection, dims: int, profile: str | None = None
+    ) -> None:
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS chunks (
                 id            TEXT PRIMARY KEY,
@@ -125,6 +140,24 @@ class VectorStore:
             "INSERT OR REPLACE INTO metadata(key, value) VALUES('embedding_dims', ?)",
             (str(dims),),
         )
+
+        if profile is not None:
+            stored_profile = conn.execute(
+                "SELECT value FROM metadata WHERE key = 'embedding_profile'"
+            ).fetchone()
+            has_chunks = conn.execute("SELECT 1 FROM chunks LIMIT 1").fetchone() is not None
+            if stored_profile is not None and stored_profile[0] != profile and has_chunks:
+                raise RuntimeError(
+                    f"Embedding profile mismatch: the index was built with "
+                    f"{stored_profile[0]!r} but this process uses {profile!r}. "
+                    f"Queries and stored vectors would not be comparable. "
+                    f"Delete {self.db_path} to rebuild the index."
+                )
+            conn.execute(
+                "INSERT OR REPLACE INTO metadata(key, value) VALUES('embedding_profile', ?)",
+                (profile,),
+            )
+
         conn.commit()
 
     # ── Write ─────────────────────────────────────────────────────────────────

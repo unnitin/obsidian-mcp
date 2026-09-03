@@ -9,6 +9,7 @@ from obsidian_search.config import Settings
 from obsidian_search.embedding.embedder import Embedder
 from obsidian_search.ingestion.pipeline import IndexingPipeline
 from obsidian_search.store.vector_store import VectorStore
+from obsidian_search.vault.writer import VaultWriter
 from obsidian_search.watcher.vault_watcher import VaultWatcher
 
 
@@ -26,6 +27,7 @@ def _build_mcp_server(
 
     reranker = Reranker(model_name=settings.reranker_model) if settings.reranker_enabled else None
     searcher = Searcher(settings=settings, store=store, embedder=embedder, reranker=reranker)
+    writer = VaultWriter(settings=settings, pipeline=pipeline)
 
     mcp = FastMCP("obsidian-search")
 
@@ -170,9 +172,57 @@ def _build_mcp_server(
             for row in rows
         ]
 
+    # ── Write tools ────────────────────────────────────────────────────────
+    # Additive only: neither tool can overwrite or delete existing writing.
+
+    @mcp.tool()
+    def create_note(file_path: str, content: str) -> dict[str, Any]:
+        """Create a new markdown note in the vault and index it.
+
+        Fails if a note already exists at that path — this tool never
+        overwrites existing writing. To add to a note that already exists,
+        use `append_to_note` instead.
+
+        Parent folders are created as needed. Write the note body as plain
+        markdown; include YAML frontmatter at the top if the vault uses it.
+
+        Args:
+            file_path: Vault-relative path for the new note, e.g.
+                "Projects/roadmap.md". A missing .md suffix is added.
+            content: Full markdown body of the note.
+
+        Returns:
+            Dict with the absolute file_path written, action, bytes_written,
+            and how many chunks were indexed.
+        """
+        return writer.create_note(file_path, content).model_dump()
+
+    @mcp.tool()
+    def append_to_note(file_path: str, content: str) -> dict[str, Any]:
+        """Append markdown to the end of an existing vault note and reindex it.
+
+        Fails if the note does not exist — use `create_note` for a new one.
+        Existing content is never modified; the new text is separated from it
+        by a blank line.
+
+        IMPORTANT: Call `search_notes` first to get the real path of the note
+        you mean, rather than guessing one.
+
+        Args:
+            file_path: Vault-relative or absolute path to an existing note.
+            content: Markdown to append.
+
+        Returns:
+            Dict with the absolute file_path written, action, bytes_written,
+            and how many chunks were indexed.
+        """
+        return writer.append_to_note(file_path, content).model_dump()
+
     @mcp.tool()
     def remove_from_index(file_path: str) -> dict[str, Any]:
         """Remove a document and all its chunks from the search index.
+
+        This only forgets the document — the file on disk is left alone.
 
         Args:
             file_path: Vault-relative or absolute path (or URL for web content).
@@ -213,10 +263,10 @@ def main() -> None:
     embedder = Embedder(model_name=settings.embedding_model)
     # Warm up the embedding model now so the first tool call isn't slow.
     # Claude Desktop can time out if the first response takes >10s.
-    embedder._load()
+    embedder.load()
 
     store = VectorStore(settings.db_path)
-    store.initialize(dims=embedder.dims)
+    store.initialize(dims=embedder.dims, profile=embedder.profile)
     logging.info("store and embedder ready, vault=%s", settings.vault_path)
 
     pipeline = IndexingPipeline(settings=settings, store=store, embedder=embedder)

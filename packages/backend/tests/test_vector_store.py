@@ -466,4 +466,60 @@ class TestLastIndexedAt:
         second = store.stats()["last_indexed_at"]
         assert first is not None and second is not None
         assert second >= first
+
+
+class TestEmbeddingProfileGuard:
+    """A model or prefix-convention change must not silently mix vectors."""
+
+    def _chunk(self) -> Chunk:
+        return Chunk(
+            id="c1",
+            source_type=SourceType.MARKDOWN,
+            file_path="/vault/a.md",
+            content="body text",
+            mtime=1.0,
+            chunk_index=0,
+        )
+
+    def test_same_profile_reopens_cleanly(self, tmp_path: Path) -> None:
+        db = tmp_path / "p.db"
+        s1 = VectorStore(db)
+        s1.initialize(dims=DIMS, profile="model-a|doc=|query=")
+        s1.upsert_chunks([self._chunk()], np.ones((1, DIMS), dtype=np.float32))
+        s1.close()
+
+        s2 = VectorStore(db)
+        s2.initialize(dims=DIMS, profile="model-a|doc=|query=")
+        assert s2.stats()["total_chunks"] == 1
+        s2.close()
+
+    def test_changed_profile_raises(self, tmp_path: Path) -> None:
+        db = tmp_path / "p.db"
+        s1 = VectorStore(db)
+        s1.initialize(dims=DIMS, profile="model-a|doc=search_document: |query=search_query: ")
+        s1.upsert_chunks([self._chunk()], np.ones((1, DIMS), dtype=np.float32))
+        s1.close()
+
+        s2 = VectorStore(db)
+        with pytest.raises(RuntimeError, match="Embedding profile mismatch"):
+            s2.initialize(dims=DIMS, profile="model-a|doc=|query=Represent this sentence: ")
+        s2.close()
+
+    def test_changed_profile_on_empty_index_is_allowed(self, tmp_path: Path) -> None:
+        """Nothing to invalidate yet — adopt the new profile silently."""
+        db = tmp_path / "p.db"
+        s1 = VectorStore(db)
+        s1.initialize(dims=DIMS, profile="model-a|doc=|query=")
+        s1.close()
+
+        s2 = VectorStore(db)
+        s2.initialize(dims=DIMS, profile="model-b|doc=|query=")
+        assert s2.stats()["total_chunks"] == 0
+        s2.close()
+
+    def test_profile_is_optional_for_callers_that_do_not_track_it(self, tmp_path: Path) -> None:
+        store = VectorStore(tmp_path / "p.db")
+        store.initialize(dims=DIMS)
+        store.upsert_chunks([self._chunk()], np.ones((1, DIMS), dtype=np.float32))
+        assert store.stats()["total_chunks"] == 1
         store.close()
