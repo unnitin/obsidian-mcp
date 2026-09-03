@@ -258,7 +258,15 @@ tail -f /tmp/obsidian-search.log
 
 #### Access from other Macs on your network
 
-Setting `OBSIDIAN_SEARCH_HOST=0.0.0.0` (shown in the plist above) makes the server listen on all interfaces. You also need to allow the port through the macOS firewall:
+Setting `OBSIDIAN_SEARCH_HOST=0.0.0.0` (shown in the plist above) makes the server listen on all interfaces. **This requires an API token** — the server refuses to start on a non-loopback host without one, because the API can read note contents and index files:
+
+```bash
+python -c 'import secrets; print(secrets.token_urlsafe(32))'
+# put the result in OBSIDIAN_SEARCH_API_TOKEN, then send it on every request:
+curl -H "Authorization: Bearer $TOKEN" http://192.168.1.42:51234/status
+```
+
+You also need to allow the port through the macOS firewall:
 
 1. Open **System Settings → Network → Firewall → Options**
 2. Click **+**, navigate to `/Users/yourname/.venv/bin/uvicorn`, and set it to **Allow incoming connections**
@@ -385,6 +393,8 @@ All settings can be set via environment variables or a `.env` file in the projec
 | `VAULT_PATH` | *(required)* | Absolute path to your Obsidian vault |
 | `OBSIDIAN_SEARCH_PORT` | `51234` | FastAPI server port |
 | `OBSIDIAN_SEARCH_HOST` | `127.0.0.1` | FastAPI server host |
+| `OBSIDIAN_SEARCH_API_TOKEN` | *(none)* | Bearer token required on every route except `/health`. Mandatory when `HOST` is not loopback |
+| `OBSIDIAN_SEARCH_ALLOW_PRIVATE_URLS` | `false` | Allow `/ingest/url` to fetch private/loopback addresses |
 | `OBSIDIAN_SEARCH_EMBEDDING_MODEL` | `nomic-ai/nomic-embed-text-v1.5` | HuggingFace model ID |
 | `OBSIDIAN_SEARCH_DEVICE` | `cpu` | Torch device for the embedder and reranker. MPS costs ~1 GB of address space per model |
 | `OBSIDIAN_SEARCH_DEFAULT_TOP_K` | `10` | Default number of search results |

@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 
 from obsidian_search.config import Settings, VaultPathError
 from obsidian_search.ingestion.pipeline import IndexingPipeline, iter_vault_files
+from obsidian_search.ingestion.url_guard import UrlNotAllowedError
 from obsidian_search.models import IngestResult
 
 
@@ -119,7 +120,13 @@ def create_ingest_router(pipeline: IndexingPipeline, settings: Settings) -> APIR
 
     @router.post("/ingest/url", response_model=IngestResult, status_code=status.HTTP_200_OK)
     def ingest_url(req: IngestUrlRequest) -> IngestResult:
-        result = pipeline.index_url(req.url, tags=req.tags)
+        try:
+            result = pipeline.index_url(req.url, tags=req.tags)
+        except UrlNotAllowedError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=str(exc),
+            ) from exc
         if result.status == "failed":
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
