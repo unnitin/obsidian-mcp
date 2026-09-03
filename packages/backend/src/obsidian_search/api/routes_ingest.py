@@ -14,20 +14,6 @@ from obsidian_search.config import Settings, VaultPathError
 from obsidian_search.ingestion.pipeline import IndexingPipeline, iter_vault_files
 from obsidian_search.models import IngestResult
 
-# ── In-memory reindex job tracker ─────────────────────────────────────────────
-
-_jobs: dict[str, ReindexStatus] = {}
-_job_stop_events: dict[str, threading.Event] = {}
-_MAX_COMPLETED_JOBS = 20
-
-
-def _evict_finished_jobs() -> None:
-    """Remove oldest completed/failed/cancelled jobs, keeping at most _MAX_COMPLETED_JOBS."""
-    finished = [jid for jid, j in _jobs.items() if j.status not in ("running",)]
-    for jid in finished[:-_MAX_COMPLETED_JOBS]:
-        del _jobs[jid]
-        _job_stop_events.pop(jid, None)
-
 
 def _is_url(value: str) -> bool:
     return value.startswith(("http://", "https://"))
@@ -40,6 +26,53 @@ class ReindexStatus(BaseModel):
     files_done: int = 0
     chunks_added: int = 0
     error: str | None = None
+
+
+# ── In-memory reindex job tracker ─────────────────────────────────────────────
+
+
+class ReindexJobs:
+    """Reindex jobs for one router instance.
+
+    Owned by the router rather than the module: as a module global it was
+    shared by every app built in the process, so tests leaked jobs into each
+    other and two apps over one vault would have reported each other's
+    progress.
+    """
+
+    MAX_COMPLETED = 20
+
+    def __init__(self) -> None:
+        self._jobs: dict[str, ReindexStatus] = {}
+        self._stop_events: dict[str, threading.Event] = {}
+        self._lock = threading.Lock()
+
+    def create(self) -> tuple[ReindexStatus, threading.Event]:
+        """Register a new running job, evicting old finished ones."""
+        with self._lock:
+            self._evict_finished()
+            job = ReindexStatus(job_id=str(uuid.uuid4()), status="running")
+            stop = threading.Event()
+            self._jobs[job.job_id] = job
+            self._stop_events[job.job_id] = stop
+            return job, stop
+
+    def get(self, job_id: str) -> ReindexStatus | None:
+        with self._lock:
+            return self._jobs.get(job_id)
+
+    def request_stop(self, job_id: str) -> None:
+        with self._lock:
+            event = self._stop_events.get(job_id)
+        if event is not None:
+            event.set()
+
+    def _evict_finished(self) -> None:
+        """Keep at most MAX_COMPLETED finished jobs; running jobs are never evicted."""
+        finished = [jid for jid, j in self._jobs.items() if j.status != "running"]
+        for jid in finished[: -self.MAX_COMPLETED or None]:
+            del self._jobs[jid]
+            self._stop_events.pop(jid, None)
 
 
 # ── Request schemas ───────────────────────────────────────────────────────────
@@ -68,6 +101,7 @@ class RemoveDocumentRequest(BaseModel):
 def create_ingest_router(pipeline: IndexingPipeline, settings: Settings) -> APIRouter:
     """Return a router with all ingest routes bound to *pipeline*."""
     router = APIRouter()
+    jobs = ReindexJobs()
 
     def _in_vault(file_path: str) -> Path:
         """Resolve a caller-supplied path, rejecting anything outside the vault.
@@ -136,12 +170,7 @@ def create_ingest_router(pipeline: IndexingPipeline, settings: Settings) -> APIR
 
     @router.post("/reindex", response_model=ReindexStatus, status_code=status.HTTP_202_ACCEPTED)
     def start_reindex() -> ReindexStatus:
-        _evict_finished_jobs()
-        job_id = str(uuid.uuid4())
-        job = ReindexStatus(job_id=job_id, status="running")
-        stop = threading.Event()
-        _jobs[job_id] = job
-        _job_stop_events[job_id] = stop
+        job, stop = jobs.create()
 
         def _run() -> None:
             try:
@@ -164,7 +193,7 @@ def create_ingest_router(pipeline: IndexingPipeline, settings: Settings) -> APIR
 
     @router.get("/reindex/{job_id}", response_model=ReindexStatus)
     def get_reindex_status(job_id: str) -> ReindexStatus:
-        job = _jobs.get(job_id)
+        job = jobs.get(job_id)
         if job is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -174,14 +203,14 @@ def create_ingest_router(pipeline: IndexingPipeline, settings: Settings) -> APIR
 
     @router.delete("/reindex/{job_id}", response_model=ReindexStatus)
     def cancel_reindex(job_id: str) -> ReindexStatus:
-        job = _jobs.get(job_id)
+        job = jobs.get(job_id)
         if job is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"No reindex job found with id {job_id!r}",
             )
         if job.status == "running":
-            _job_stop_events[job_id].set()
+            jobs.request_stop(job_id)
         return job
 
     return router

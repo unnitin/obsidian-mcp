@@ -25,7 +25,11 @@ def _build_mcp_server(
     from obsidian_search.search.reranker import Reranker
     from obsidian_search.search.searcher import Searcher
 
-    reranker = Reranker(model_name=settings.reranker_model) if settings.reranker_enabled else None
+    reranker = (
+        Reranker(model_name=settings.reranker_model, device=settings.device)
+        if settings.reranker_enabled
+        else None
+    )
     searcher = Searcher(settings=settings, store=store, embedder=embedder, reranker=reranker)
     writer = VaultWriter(settings=settings, pipeline=pipeline)
 
@@ -260,7 +264,7 @@ def main() -> None:
     settings.db_dir.mkdir(parents=True, exist_ok=True)
 
     # Load the model first — dims are derived from it, needed to initialize the store.
-    embedder = Embedder(model_name=settings.embedding_model)
+    embedder = Embedder(model_name=settings.embedding_model, device=settings.device)
     # Warm up the embedding model now so the first tool call isn't slow.
     # Claude Desktop can time out if the first response takes >10s.
     embedder.load()
