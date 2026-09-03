@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 
 from obsidian_search.config import Settings
@@ -9,6 +10,22 @@ from obsidian_search.embedding.embedder import Embedder
 from obsidian_search.ingestion.chunker_markdown import MarkdownChunker
 from obsidian_search.models import IngestResult
 from obsidian_search.store.vector_store import VectorStore
+
+#: File types index_file() knows how to chunk.
+INDEXABLE_SUFFIXES = (".md", ".pdf")
+
+
+def iter_vault_files(settings: Settings) -> Iterator[Path]:
+    """Yield every indexable file in the vault, skipping ignored paths.
+
+    Single definition shared by startup reconciliation and the /reindex job so
+    the two cannot disagree about which files belong in the index.
+    """
+    for suffix in INDEXABLE_SUFFIXES:
+        for path in settings.vault_path.rglob(f"*{suffix}"):
+            if settings.is_ignored_path(path):
+                continue
+            yield path
 
 
 class IndexingPipeline:
