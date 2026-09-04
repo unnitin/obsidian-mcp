@@ -19,6 +19,67 @@ _FENCE_CLOSE = re.compile(r"^```\s*$")
 _CALLOUT = re.compile(r"^>\s*\[!([\w-]+)\]")
 _FIGURE = re.compile(r"!\[\[([^\]]+)\]\]")
 _HEADER = re.compile(r"^(#{1,6})\s+(.+)")
+_FENCE_OPEN = re.compile(r"^```")
+_INLINE_CODE = re.compile(r"`[^`]*`")
+
+# Obsidian inline tags: letters, digits, _, -, / — and at least one character
+# that is not a digit, so "#2024" is not a tag but "#q1-2024" is. The lookbehind
+# keeps "foo#bar", "##heading" and "page#fragment" from matching.
+_INLINE_TAG = re.compile(r"(?<![\w#/])#([\w/-]*[A-Za-z_/-][\w/-]*)")
+
+
+def _normalize_tags(value: Any) -> list[str]:  # noqa: ANN401
+    """Coerce a frontmatter tags value into a clean list of tag strings.
+
+    YAML gives us whatever the note author wrote: ``tags: work`` is a string,
+    ``tags: [a, b]`` a list, ``tags: a, b`` a single comma-joined string. The
+    old code annotated the value as list[str] without converting it, so a
+    scalar stayed a string and tag filtering did substring matching against it
+    — filtering for "or" matched a note tagged "work".
+    """
+    if value is None:
+        return []
+    if isinstance(value, str):
+        parts = re.split(r"[,\s]+", value)
+    elif isinstance(value, list | tuple | set):
+        parts = []
+        for item in value:
+            if item is None:
+                continue
+            parts.extend(re.split(r"[,\s]+", str(item)))
+    else:
+        parts = [str(value)]
+
+    tags: list[str] = []
+    seen: set[str] = set()
+    for part in parts:
+        tag = part.strip().lstrip("#").strip("/")
+        if tag and tag not in seen:
+            seen.add(tag)
+            tags.append(tag)
+    return tags
+
+
+def _without_code(body: str) -> str:
+    """Drop fenced blocks and inline code, so they cannot yield phantom tags."""
+    kept: list[str] = []
+    in_fence = False
+    for line in body.splitlines():
+        if _FENCE_OPEN.match(line):
+            in_fence = not in_fence
+            continue
+        if not in_fence:
+            kept.append(_INLINE_CODE.sub(" ", line))
+    return "\n".join(kept)
+
+
+def _inline_tags(body: str) -> list[str]:
+    """Tags written inline in the note body, e.g. "about #machine-learning".
+
+    This is the dominant way Obsidian notes are tagged, and it was not indexed
+    at all — only frontmatter was read.
+    """
+    return _normalize_tags(_INLINE_TAG.findall(_without_code(body)))
 
 
 @dataclass
@@ -26,6 +87,18 @@ class _Section:
     header_path: str
     lines: list[str] = field(default_factory=list)
     level: int = 0
+
+
+@dataclass
+class _Block:
+    """A homogeneous run of lines within a section."""
+
+    kind: str  # "mermaid" | "table" | "callout" | "prose"
+    lines: list[str] = field(default_factory=list)
+
+    @property
+    def text(self) -> str:
+        return "\n".join(self.lines).strip()
 
 
 def _tokens(text: str) -> int:
@@ -90,7 +163,12 @@ class MarkdownChunker:
         post = frontmatter.loads(content)
         body: str = post.content
         metadata: dict[str, Any] = dict(post.metadata)
-        tags: list[str] = metadata.get("tags", [])
+
+        # Frontmatter and inline tags both count, and both need normalising.
+        tags: list[str] = _normalize_tags(metadata.get("tags"))
+        for tag in _inline_tags(body):
+            if tag not in tags:
+                tags.append(tag)
 
         sections = self._split_sections(body)
         chunks: list[Chunk] = []
@@ -173,28 +251,105 @@ class MarkdownChunker:
 
         return sections
 
+    def _split_blocks(self, text: str) -> list[_Block]:
+        """Split a section into runs of one block type each.
+
+        Detection used to run against the whole section, so a table or diagram
+        only registered when it was the *only* thing in that section. One line
+        of prose above a table meant the table fell through to sentence
+        splitting and its rows were shredded across chunks.
+        """
+        lines = text.splitlines()
+        blocks: list[_Block] = []
+        i = 0
+        n = len(lines)
+
+        def _starts_special(line: str) -> bool:
+            return bool(
+                _MERMAID_OPEN.match(line)
+                or _FENCE_OPEN.match(line)
+                or _TABLE_ROW.match(line)
+                or _CALLOUT.match(line)
+            )
+
+        while i < n:
+            line = lines[i]
+
+            if _MERMAID_OPEN.match(line):
+                j = i + 1
+                while j < n and not _FENCE_CLOSE.match(lines[j]):
+                    j += 1
+                blocks.append(_Block("mermaid", lines[i : min(j + 1, n)]))
+                i = j + 1
+                continue
+
+            if _FENCE_OPEN.match(line):
+                # A non-mermaid code fence belongs with the prose around it, and
+                # must be consumed whole so a "|" inside it is not read as a table.
+                j = i + 1
+                while j < n and not _FENCE_CLOSE.match(lines[j]):
+                    j += 1
+                end = min(j + 1, n)
+                while end < n and not _starts_special(lines[end]):
+                    end += 1
+                blocks.append(_Block("prose", lines[i:end]))
+                i = end
+                continue
+
+            if _TABLE_ROW.match(line):
+                j = i
+                while j < n and _TABLE_ROW.match(lines[j]):
+                    j += 1
+                blocks.append(_Block("table", lines[i:j]))
+                i = j
+                continue
+
+            if _CALLOUT.match(line):
+                j = i
+                while j < n and lines[j].lstrip().startswith(">"):
+                    j += 1
+                blocks.append(_Block("callout", lines[i:j]))
+                i = j
+                continue
+
+            j = i + 1
+            while j < n and not _starts_special(lines[j]):
+                j += 1
+            blocks.append(_Block("prose", lines[i:j]))
+            i = j
+
+        return [b for b in blocks if b.text]
+
     def _process_block(self, text: str, header: str) -> list[tuple[str, dict[str, Any]]]:
-        """Detect special blocks; fall back to sentence splitting for long text.
+        """Chunk one section, handling each block inside it on its own terms.
 
         Returns a list of (chunk_text, extra_metadata) pairs. extra_metadata is
         merged into the chunk's metadata dict, carrying chunk_type, callout_type,
         and figure_name where applicable.
         """
-        lines = text.splitlines()
-        first = lines[0] if lines else ""
+        pairs: list[tuple[str, dict[str, Any]]] = []
+        for block in self._split_blocks(text):
+            pairs.extend(self._process_single_block(block))
+        return pairs
+
+    def _process_single_block(self, block: _Block) -> list[tuple[str, dict[str, Any]]]:
+        text = block.text
 
         # Mermaid diagram — index DSL as atomic chunk
-        if _MERMAID_OPEN.match(first):
+        if block.kind == "mermaid":
             return [(text, {"chunk_type": "mermaid"})]
 
         # Table — atomic; split on row boundaries if oversized
-        if all(_TABLE_ROW.match(row) or not row.strip() for row in lines if row.strip()):
+        if block.kind == "table":
             return [(t, {"chunk_type": "table"}) for t in self._split_table(text)]
 
         # Callout block
-        m = _CALLOUT.match(first)
-        if m:
-            return [(text, {"chunk_type": "callout", "callout_type": m.group(1).lower()})]
+        if block.kind == "callout":
+            m = _CALLOUT.match(block.lines[0])
+            meta: dict[str, Any] = {"chunk_type": "callout"}
+            if m:
+                meta["callout_type"] = m.group(1).lower()
+            return [(text, meta)]
 
         # Figure embed — keep surrounding context
         fig = _FIGURE.search(text)
@@ -230,16 +385,26 @@ class MarkdownChunker:
         return chunks or [text]
 
     def _merge_small(self, chunks: list[Chunk]) -> list[Chunk]:
+        """Fold undersized chunks into the previous chunk of the same section.
+
+        Merging used to reach across section boundaries, so a short trailing
+        section was appended to whatever preceded it and inherited that chunk's
+        header_path and chunk_type — search then reported the wrong breadcrumb
+        and attributed the text to the wrong heading.
+        """
         if not chunks:
             return chunks
         merged: list[Chunk] = []
-        i = 0
-        while i < len(chunks):
-            c = chunks[i]
-            if _tokens(c.content) < self.min_tokens and merged:
+        for c in chunks:
+            can_merge = (
+                _tokens(c.content) < self.min_tokens
+                and bool(merged)
+                and merged[-1].header_path == c.header_path
+                and merged[-1].metadata.get("chunk_type") == c.metadata.get("chunk_type")
+            )
+            if can_merge:
                 prev = merged[-1]
                 merged[-1] = prev.model_copy(update={"content": prev.content + "\n\n" + c.content})
             else:
                 merged.append(c)
-            i += 1
         return merged

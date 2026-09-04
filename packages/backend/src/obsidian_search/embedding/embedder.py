@@ -81,6 +81,18 @@ class Embedder:
         """
         return f"{self.model_name}|doc={self.prefixes.document}|query={self.prefixes.query}"
 
+    @property
+    def legacy_profile(self) -> str:
+        """The profile an index built before prefixes became per-model would have.
+
+        Older versions applied the nomic prefixes to every model
+        unconditionally, so that convention plus the model name identifies what
+        an index carrying no recorded profile actually contains. Lets the store
+        tell a genuinely compatible legacy index (nomic all along) apart from
+        one whose vectors no longer match the queries we now generate.
+        """
+        return f"{self.model_name}|doc={_NOMIC.document}|query={_NOMIC.query}"
+
     def load(self) -> Any:  # noqa: ANN401
         """Load the model now. Callers use this to warm up before serving."""
         return self._load()

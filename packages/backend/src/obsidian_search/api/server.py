@@ -181,7 +181,11 @@ def main() -> None:
     embedder.load()
 
     store = VectorStore(settings.db_path)
-    store.initialize(dims=embedder.dims, profile=embedder.profile)
+    store.initialize(
+        dims=embedder.dims,
+        profile=embedder.profile,
+        legacy_profile=embedder.legacy_profile,
+    )
 
     app = create_app(settings=settings, store=store, embedder=embedder, start_watcher=True)
 

@@ -105,8 +105,11 @@ on upgrade — see **Migration** at the end of this section.
 ### Migration
 
 **Rebuild the index.** The embedding-prefix fix changes the vectors the default
-model produces, so an existing index is not comparable with new queries. The
-server will refuse to start against a mismatched index and tell you this:
+model produces, so an index built before this release is not comparable with
+new queries. The server detects this and refuses to start — including for
+indexes predating profile tracking, where it falls back to what such an index
+must contain rather than assuming the best. If you were running the nomic model
+throughout, your index is genuinely compatible and will be accepted as-is.
 
 ```bash
 rm /path/to/vault/.obsidian-search/semantic-search.db

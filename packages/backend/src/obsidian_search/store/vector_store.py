@@ -95,7 +95,12 @@ class VectorStore:
 
     # ── Schema ────────────────────────────────────────────────────────────────
 
-    def initialize(self, dims: int, profile: str | None = None) -> None:
+    def initialize(
+        self,
+        dims: int,
+        profile: str | None = None,
+        legacy_profile: str | None = None,
+    ) -> None:
         """Create the schema and verify the index matches the current embedder.
 
         Args:
@@ -104,14 +109,22 @@ class VectorStore:
                 convention). Stored on first use and compared on every later
                 open, so changing either invalidates the index loudly instead
                 of silently mixing incompatible vectors.
+            legacy_profile: What a populated index carrying no recorded profile
+                must contain, given how older versions embedded. Without this,
+                an index predating profile tracking passes unchecked — which is
+                exactly the population that needs rebuilding.
         """
         self._dims = dims
         with self._write_lock:
             conn = self._conn_()
-            self._create_schema(conn, dims, profile)
+            self._create_schema(conn, dims, profile, legacy_profile)
 
     def _create_schema(
-        self, conn: sqlite3.Connection, dims: int, profile: str | None = None
+        self,
+        conn: sqlite3.Connection,
+        dims: int,
+        profile: str | None = None,
+        legacy_profile: str | None = None,
     ) -> None:
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS chunks (
@@ -150,17 +163,32 @@ class VectorStore:
         )
 
         if profile is not None:
-            stored_profile = conn.execute(
+            row = conn.execute(
                 "SELECT value FROM metadata WHERE key = 'embedding_profile'"
             ).fetchone()
+            stored_profile: str | None = row[0] if row is not None else None
             has_chunks = conn.execute("SELECT 1 FROM chunks LIMIT 1").fetchone() is not None
-            if stored_profile is not None and stored_profile[0] != profile and has_chunks:
-                raise RuntimeError(
-                    f"Embedding profile mismatch: the index was built with "
-                    f"{stored_profile[0]!r} but this process uses {profile!r}. "
-                    f"Queries and stored vectors would not be comparable. "
-                    f"Delete {self.db_path} to rebuild the index."
-                )
+
+            if has_chunks:
+                # An index with no recorded profile predates profile tracking.
+                # Fall back to what such an index must contain rather than
+                # waving it through — that silently queries stale vectors.
+                effective = stored_profile if stored_profile is not None else legacy_profile
+                if effective is not None and effective != profile:
+                    provenance = (
+                        "the index was built with"
+                        if stored_profile is not None
+                        else "the index records no profile, and one built by an earlier "
+                        "version would contain"
+                    )
+                    raise RuntimeError(
+                        f"Embedding profile mismatch: {provenance} {effective!r} "
+                        f"but this process uses {profile!r}. Queries and stored "
+                        f"vectors would not be comparable, so results would be "
+                        f"quietly wrong rather than obviously broken. "
+                        f"Delete {self.db_path} to rebuild the index."
+                    )
+
             conn.execute(
                 "INSERT OR REPLACE INTO metadata(key, value) VALUES('embedding_profile', ?)",
                 (profile,),
