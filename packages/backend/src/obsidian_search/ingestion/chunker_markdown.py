@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass, field
 from typing import Any
@@ -9,6 +10,8 @@ from typing import Any
 import frontmatter
 
 from obsidian_search.models import Chunk, ChunkId, SourceType
+
+logger = logging.getLogger(__name__)
 
 # Rough token estimate: 1 token ≈ 4 characters
 _CHARS_PER_TOKEN = 4
@@ -107,16 +110,30 @@ def _tokens(text: str) -> int:
 
 def _split_sentences(text: str, max_tokens: int, overlap_tokens: int) -> list[str]:
     """Split text into overlapping sentence-boundary chunks."""
+    sentences: list[str] | None = None
     try:
         import nltk
 
         try:
             sentences = nltk.sent_tokenize(text)
         except LookupError:
-            nltk.download("punkt_tab", quiet=True)
-            sentences = nltk.sent_tokenize(text)
+            # First use downloads the tokeniser. This runs inside indexing, on
+            # watcher threads, so a failure here (offline, proxy, read-only
+            # cache) must degrade rather than abort the whole file — the retry
+            # used to be unguarded and its LookupError propagated out.
+            try:
+                nltk.download("punkt_tab", quiet=True)
+                sentences = nltk.sent_tokenize(text)
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "NLTK sentence tokeniser unavailable; falling back to "
+                    "regex sentence splitting for this document"
+                )
     except ImportError:
-        # Fallback: split on period-newline boundaries
+        pass
+
+    if sentences is None:
+        # Fallback: split on sentence-ending punctuation
         sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", text) if s.strip()]
 
     chunks: list[str] = []
@@ -399,12 +416,21 @@ class MarkdownChunker:
             can_merge = (
                 _tokens(c.content) < self.min_tokens
                 and bool(merged)
+                and _tokens(merged[-1].content) + _tokens(c.content) <= self.max_tokens
                 and merged[-1].header_path == c.header_path
-                and merged[-1].metadata.get("chunk_type") == c.metadata.get("chunk_type")
             )
-            if can_merge:
-                prev = merged[-1]
-                merged[-1] = prev.model_copy(update={"content": prev.content + "\n\n" + c.content})
-            else:
+            if not can_merge:
                 merged.append(c)
+                continue
+
+            prev = merged[-1]
+            update: dict[str, Any] = {"content": prev.content + "\n\n" + c.content}
+            # Blocks of different kinds may merge — a two-row table does not
+            # need a chunk of its own — but the result must not keep a label
+            # that now describes only part of it.
+            if prev.metadata.get("chunk_type") != c.metadata.get("chunk_type"):
+                mixed = {k: v for k, v in prev.metadata.items() if k != "chunk_type"}
+                mixed.pop("callout_type", None)
+                update["metadata"] = mixed
+            merged[-1] = prev.model_copy(update=update)
         return merged

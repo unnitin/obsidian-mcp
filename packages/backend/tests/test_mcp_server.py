@@ -69,14 +69,12 @@ async def _call(mcp: object, tool: str, **kwargs: object) -> object:
 
 
 class TestMcpSearchNotes:
-    @pytest.mark.asyncio
     async def test_empty_store_returns_empty(self, tmp_path: Path) -> None:
         mcp, store = _setup(tmp_path)
         result = await _call(mcp, "search_notes", query="quantum computing", top_k=5)
         assert result == []
         store.close()
 
-    @pytest.mark.asyncio
     async def test_returns_results_for_matching_query(self, tmp_path: Path) -> None:
         mcp, store = _setup(tmp_path)
         _insert_chunk(store, "Test content here about quantum physics.")
@@ -86,7 +84,6 @@ class TestMcpSearchNotes:
         assert "score" in result[0]
         store.close()
 
-    @pytest.mark.asyncio
     async def test_source_type_filter(self, tmp_path: Path) -> None:
         mcp, store = _setup(tmp_path)
         _insert_chunk(store)
@@ -94,7 +91,6 @@ class TestMcpSearchNotes:
         assert result == []
         store.close()
 
-    @pytest.mark.asyncio
     async def test_tag_filter(self, tmp_path: Path) -> None:
         mcp, store = _setup(tmp_path)
         _insert_chunk(store)
@@ -104,7 +100,6 @@ class TestMcpSearchNotes:
 
 
 class TestMcpGetNoteContent:
-    @pytest.mark.asyncio
     async def test_existing_file_returned(self, tmp_path: Path) -> None:
         note = tmp_path / "note.md"
         note.write_text("# Hello\n\nWorld.")
@@ -114,7 +109,6 @@ class TestMcpGetNoteContent:
         assert "Hello" in text
         store.close()
 
-    @pytest.mark.asyncio
     async def test_relative_path_resolved_against_vault(self, tmp_path: Path) -> None:
         note = tmp_path / "note.md"
         note.write_text("# Relative")
@@ -124,7 +118,6 @@ class TestMcpGetNoteContent:
         assert "Relative" in text
         store.close()
 
-    @pytest.mark.asyncio
     async def test_nonexistent_file_raises_error(self, tmp_path: Path) -> None:
         from fastmcp.exceptions import ToolError
 
@@ -133,7 +126,6 @@ class TestMcpGetNoteContent:
             await mcp.call_tool("get_note_content", {"file_path": str(tmp_path / "ghost.md")})  # type: ignore[attr-defined]
         store.close()
 
-    @pytest.mark.asyncio
     async def test_path_outside_vault_rejected(self, tmp_path: Path) -> None:
         from fastmcp.exceptions import ToolError
 
@@ -144,7 +136,6 @@ class TestMcpGetNoteContent:
 
 
 class TestMcpIndexUrl:
-    @pytest.mark.asyncio
     async def test_successful_url_index(self, tmp_path: Path) -> None:
         mcp, store = _setup(tmp_path)
         with mock.patch(
@@ -167,7 +158,6 @@ class TestMcpIndexUrl:
         assert result["status"] == "ok"  # type: ignore[index]
         store.close()
 
-    @pytest.mark.asyncio
     async def test_failed_url_returns_failed_status(self, tmp_path: Path) -> None:
         mcp, store = _setup(tmp_path)
         with mock.patch(
@@ -180,7 +170,6 @@ class TestMcpIndexUrl:
 
 
 class TestMcpIndexPdf:
-    @pytest.mark.asyncio
     async def test_pdf_index_via_pipeline(self, tmp_path: Path) -> None:
         pdf = tmp_path / "doc.pdf"
         pdf.write_bytes(b"fake")
@@ -195,7 +184,6 @@ class TestMcpIndexPdf:
 
 
 class TestMcpGetIndexStatus:
-    @pytest.mark.asyncio
     async def test_returns_stats_dict(self, tmp_path: Path) -> None:
         mcp, store = _setup(tmp_path)
         result = await _call(mcp, "get_index_status")
@@ -203,7 +191,6 @@ class TestMcpGetIndexStatus:
         assert "total_documents" in result  # type: ignore[operator]
         store.close()
 
-    @pytest.mark.asyncio
     async def test_stats_after_insert(self, tmp_path: Path) -> None:
         mcp, store = _setup(tmp_path)
         _insert_chunk(store)
@@ -213,14 +200,12 @@ class TestMcpGetIndexStatus:
 
 
 class TestMcpListIndexedFiles:
-    @pytest.mark.asyncio
     async def test_empty_store_returns_empty(self, tmp_path: Path) -> None:
         mcp, store = _setup(tmp_path)
         result = await _call(mcp, "list_indexed_files")
         assert result == []
         store.close()
 
-    @pytest.mark.asyncio
     async def test_returns_indexed_files(self, tmp_path: Path) -> None:
         mcp, store = _setup(tmp_path)
         _insert_chunk(store)
@@ -230,7 +215,6 @@ class TestMcpListIndexedFiles:
         assert result[0]["chunk_count"] == 1  # type: ignore[index]
         store.close()
 
-    @pytest.mark.asyncio
     async def test_source_type_filter(self, tmp_path: Path) -> None:
         mcp, store = _setup(tmp_path)
         _insert_chunk(store)
@@ -240,7 +224,6 @@ class TestMcpListIndexedFiles:
 
 
 class TestMcpRemoveFromIndex:
-    @pytest.mark.asyncio
     async def test_removes_existing_document(self, tmp_path: Path) -> None:
         mcp, store = _setup(tmp_path)
         _insert_chunk(store, file_path=str((tmp_path / "a.md").resolve()))
@@ -248,7 +231,6 @@ class TestMcpRemoveFromIndex:
         assert result["chunks_removed"] == 1  # type: ignore[index]
         store.close()
 
-    @pytest.mark.asyncio
     async def test_removes_web_document_by_url(self, tmp_path: Path) -> None:
         mcp, store = _setup(tmp_path)
         url = "https://example.com/post"
@@ -267,7 +249,6 @@ class TestMcpRemoveFromIndex:
         assert result["chunks_removed"] == 1  # type: ignore[index]
         store.close()
 
-    @pytest.mark.asyncio
     async def test_path_outside_vault_rejected(self, tmp_path: Path) -> None:
         from fastmcp.exceptions import ToolError
 
@@ -276,7 +257,6 @@ class TestMcpRemoveFromIndex:
             await _call(mcp, "remove_from_index", file_path="/etc/hosts")
         store.close()
 
-    @pytest.mark.asyncio
     async def test_remove_nonexistent_returns_zero(self, tmp_path: Path) -> None:
         mcp, store = _setup(tmp_path)
         result = await _call(mcp, "remove_from_index", file_path="ghost.md")
@@ -285,7 +265,6 @@ class TestMcpRemoveFromIndex:
 
 
 class TestMcpCreateNote:
-    @pytest.mark.asyncio
     async def test_creates_and_indexes_note(self, tmp_path: Path) -> None:
         mcp, store = _setup(tmp_path)
         result = await _call(
@@ -296,7 +275,6 @@ class TestMcpCreateNote:
         assert result["chunks_indexed"] > 0  # type: ignore[index]
         store.close()
 
-    @pytest.mark.asyncio
     async def test_new_note_is_searchable(self, tmp_path: Path) -> None:
         mcp, store = _setup(tmp_path)
         await _call(
@@ -306,7 +284,6 @@ class TestMcpCreateNote:
         assert len(results) > 0  # type: ignore[arg-type]
         store.close()
 
-    @pytest.mark.asyncio
     async def test_refuses_to_overwrite(self, tmp_path: Path) -> None:
         from fastmcp.exceptions import ToolError
 
@@ -317,7 +294,6 @@ class TestMcpCreateNote:
         assert (tmp_path / "note.md").read_text() == "original"
         store.close()
 
-    @pytest.mark.asyncio
     async def test_rejects_path_outside_vault(self, tmp_path: Path) -> None:
         from fastmcp.exceptions import ToolError
 
@@ -328,7 +304,6 @@ class TestMcpCreateNote:
 
 
 class TestMcpAppendToNote:
-    @pytest.mark.asyncio
     async def test_appends_and_reindexes(self, tmp_path: Path) -> None:
         (tmp_path / "log.md").write_text("# Log\n")
         mcp, store = _setup(tmp_path)
@@ -339,7 +314,6 @@ class TestMcpAppendToNote:
         assert (tmp_path / "log.md").read_text() == "# Log\n\nEntry about photosynthesis.\n"
         store.close()
 
-    @pytest.mark.asyncio
     async def test_refuses_missing_note(self, tmp_path: Path) -> None:
         from fastmcp.exceptions import ToolError
 
@@ -350,7 +324,6 @@ class TestMcpAppendToNote:
 
 
 class TestMcpIndexNote:
-    @pytest.mark.asyncio
     async def test_indexes_markdown_note(self, tmp_path: Path) -> None:
         note = tmp_path / "note.md"
         note.write_text("# Heading\n\nBody paragraph with content.")
@@ -360,14 +333,12 @@ class TestMcpIndexNote:
         assert result["chunks_added"] > 0  # type: ignore[index]
         store.close()
 
-    @pytest.mark.asyncio
     async def test_missing_note_returns_not_found(self, tmp_path: Path) -> None:
         mcp, store = _setup(tmp_path)
         result = await _call(mcp, "index_note", file_path="ghost.md")
         assert result["status"] == "not_found"  # type: ignore[index]
         store.close()
 
-    @pytest.mark.asyncio
     async def test_non_markdown_returns_unsupported(self, tmp_path: Path) -> None:
         (tmp_path / "readme.txt").write_text("hello")
         mcp, store = _setup(tmp_path)
@@ -375,7 +346,6 @@ class TestMcpIndexNote:
         assert result["status"] == "unsupported"  # type: ignore[index]
         store.close()
 
-    @pytest.mark.asyncio
     async def test_rejects_path_outside_vault(self, tmp_path: Path) -> None:
         from fastmcp.exceptions import ToolError
 

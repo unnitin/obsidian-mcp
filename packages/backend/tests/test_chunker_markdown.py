@@ -584,3 +584,82 @@ class TestBlocksWithinSection:
     def test_all_blocks_keep_the_section_breadcrumb(self) -> None:
         content = "# Mixed\n\nIntro.\n\n| a | b |\n|---|---|\n| 1 | 2 |\n"
         assert all(c.header_path == "Mixed" for c in self._chunk(content))
+
+
+class TestFragmentation:
+    """Block detection must not shatter a note into meaningless fragments.
+
+    Requiring an equal chunk_type to merge meant alternating prose and small
+    tables never coalesced: a 15-entry log went from one chunk to thirty, with
+    a median of 36 characters. Embedding fragments that small is worse than not
+    splitting at all.
+    """
+
+    def _log_note(self, entries: int = 15) -> str:
+        body = "\n".join(
+            f"Point {i} about the thing.\n| k | v |\n|---|---|\n| a{i} | b{i} |\n"
+            for i in range(entries)
+        )
+        return f"# Log\n\n{body}"
+
+    def test_alternating_blocks_do_not_fragment(self) -> None:
+        chunks = MarkdownChunker(max_tokens=512, min_tokens=64).chunk(self._log_note(), FILE, MTIME)
+        assert len(chunks) <= 3
+        assert min(_tokens(c.content) for c in chunks) >= 64 or len(chunks) == 1
+
+    def test_merged_chunk_drops_a_label_it_no_longer_fits(self) -> None:
+        """A prose+table chunk must not claim to be a table."""
+        chunks = MarkdownChunker(max_tokens=512, min_tokens=64).chunk(
+            "# Log\n\nA line.\n\n| k | v |\n|---|---|\n| a | b |\n", FILE, MTIME
+        )
+        assert len(chunks) == 1
+        assert "chunk_type" not in chunks[0].metadata
+
+    def test_merging_respects_max_tokens(self) -> None:
+        """Coalescing must not build a chunk the model would truncate."""
+        chunks = MarkdownChunker(max_tokens=40, min_tokens=30).chunk(
+            self._log_note(entries=20), FILE, MTIME
+        )
+        assert all(_tokens(c.content) <= 40 * 2 for c in chunks)
+        assert len(chunks) > 1
+
+    def test_large_table_still_splits_on_row_boundaries(self) -> None:
+        """The #37 behaviour must survive: prose separated, rows intact."""
+        rows = "".join(f"| r{i} | v{i} |\n" for i in range(200))
+        chunks = MarkdownChunker(max_tokens=512, min_tokens=64).chunk(
+            f"# Data\n\nIntro.\n\n| a | b |\n|---|---|\n{rows}", FILE, MTIME
+        )
+        tables = [c for c in chunks if c.metadata.get("chunk_type") == "table"]
+        assert len(tables) > 1
+        assert all("| a | b |" in t.content for t in tables)
+
+    def test_cross_section_merging_still_refused(self) -> None:
+        """And so must the header-attribution fix."""
+        content = "## Introduction\n\n" + ("Intro sentence. " * 60) + "\n\n## Conclusions\n\nShort."
+        chunks = MarkdownChunker(max_tokens=512, min_tokens=64).chunk(content, FILE, MTIME)
+        by_header = {c.header_path: c.content for c in chunks}
+        assert "Short." in by_header["Conclusions"]
+        assert "Short." not in by_header["Introduction"]
+
+
+class TestNltkDownloadFailure:
+    """Indexing must survive an unavailable sentence tokeniser."""
+
+    def test_failed_download_falls_back_to_regex(self) -> None:
+        """The retry used to be unguarded, so a failed download aborted the file."""
+        fake = mock.MagicMock()
+        fake.sent_tokenize.side_effect = LookupError("punkt_tab missing")
+        fake.download.side_effect = OSError("network unreachable")
+        text = "First sentence here. Second sentence follows. Third one too."
+        with mock.patch.dict(sys.modules, {"nltk": fake}):
+            out = _split_sentences(text, max_tokens=4, overlap_tokens=0)
+        assert len(out) > 1
+        assert "First sentence here." in " ".join(out)
+
+    def test_successful_download_is_used(self) -> None:
+        fake = mock.MagicMock()
+        fake.sent_tokenize.side_effect = [LookupError("missing"), ["A one.", "B two."]]
+        with mock.patch.dict(sys.modules, {"nltk": fake}):
+            out = _split_sentences("A one. B two.", max_tokens=100, overlap_tokens=0)
+        fake.download.assert_called_once()
+        assert out == ["A one. B two."]

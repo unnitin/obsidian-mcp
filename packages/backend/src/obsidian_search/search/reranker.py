@@ -43,7 +43,11 @@ class Reranker:
         """Return *candidates* re-ordered by cross-encoder score (desc).
 
         The returned float is the raw logit score (higher = more relevant).
-        We keep the original ANN distance as a secondary sort key when scores tie.
+        Ties keep their incoming ANN order: Python's sort is stable, and the
+        candidates arrive sorted by distance. The docstring used to claim the
+        distance was a secondary sort key, which implied a mechanism that was
+        not there — this relies on stability instead, so do not switch to an
+        unstable sort here.
         """
         if not candidates:
             return []
@@ -52,8 +56,10 @@ class Reranker:
         pairs = [[query, chunk.content] for chunk, _ in candidates]
         scores: np.ndarray = np.asarray(model.predict(pairs), dtype=np.float32)
 
+        # strict=True: predict() returning a different number of scores than
+        # pairs is a bug worth surfacing, not silently dropping candidates.
         ranked = sorted(
-            zip(scores, candidates, strict=False),
+            zip(scores, candidates, strict=True),
             key=lambda x: float(x[0]),
             reverse=True,
         )

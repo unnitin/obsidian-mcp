@@ -11,6 +11,47 @@ on upgrade — see **Migration** at the end of this section.
 
 ### Fixed — correctness
 
+- **A legacy index was accepted as though verified.** The profile guard only
+  compared against a *previously recorded* profile, and an index built before
+  that key existed has none — so the server adopted the new profile and went on
+  answering queries from vectors embedded with the old prefixes. It now falls
+  back to what such an index must contain, refusing an incompatible one while
+  still accepting an index that was genuinely nomic all along. (#36)
+- **Tag filtering matched substrings.** A scalar `tags: work` in frontmatter
+  stayed the string `"work"` rather than becoming a list, so filtering for the
+  tag `or` matched it. Tags are now normalised from whatever YAML produced —
+  scalars, comma-joined strings, lists, numbers. (#37)
+- **Inline `#tags` were never indexed** — only frontmatter was read, though
+  inline tagging is how most vaults are organised. Body tags are now extracted
+  and merged, skipping code blocks, headings, all-numeric tags and URL
+  fragments. (#37)
+- **Special blocks only registered when alone in their section.** One line of
+  prose above a table meant the table fell through to sentence splitting and
+  its rows were shredded across chunks; same for diagrams and callouts.
+  Sections are now split into runs of one block type each — a 200-row table
+  preceded by a sentence keeps all 200 rows with the header repeated. (#37)
+- **Small chunks merged across section boundaries**, inheriting the previous
+  chunk's heading, so search reported the wrong breadcrumb. Merging now
+  requires the same section — and, after a follow-up, still coalesces
+  different block kinds within one section, since requiring an identical kind
+  turned an alternating prose-and-table note into thirty ~36-character
+  fragments. (#37)
+- **`EMBEDDING_BATCH_SIZE` never reached the model** (`encode()` hardcoded 32),
+  and **`DEFAULT_TOP_K` was unreachable** because both entry points always sent
+  an explicit `top_k`. Both settings now work. (#38)
+- **The watcher trusted whatever path an event carried.** `on_moved` forwarded
+  `dest_path` unchecked, so a note moved out of the vault was indexed at its
+  new location outside it. Events are now confined to the vault. (#38)
+- **A failed NLTK tokeniser download aborted indexing.** The download runs on
+  first use, inside indexing, on watcher threads — and the retry was unguarded,
+  so an offline or proxied first run propagated a LookupError instead of
+  falling back to regex sentence splitting. (#39)
+- **The reranker silently dropped candidates** if the model returned a
+  different number of scores than pairs (`zip(strict=False)`). It now raises.
+  Its docstring also claimed ANN distance was a secondary sort key; ties
+  actually rely on sort stability, which the comment now says. (#39)
+
+
 - **Concurrent index writes were failing silently.** `VectorStore` shares one
   SQLite connection across threads, and both write paths issued a bare
   `BEGIN IMMEDIATE` with no lock. A single connection has one transaction slot,
@@ -65,6 +106,9 @@ on upgrade — see **Migration** at the end of this section.
 
 ### Changed
 
+- The reindex query behind `list_indexed_files` moved from the MCP layer onto
+  `VectorStore`, which was reaching into the store's private connection and
+  writing its own SQL. (#38)
 - **`journal_mode=DELETE` + `synchronous=FULL`, reversing the WAL switch made
   in 0.4.0.** WAL keeps `-wal`/`-shm` sidecars beside the DB, which lives
   inside the iCloud-synced vault — iCloud can upload the `.db` and its `-wal`
@@ -98,6 +142,10 @@ on upgrade — see **Migration** at the end of this section.
 
 ### Removed
 
+- `IndexStatus` and `IndexedFile` models, referenced only by their own tests —
+  the API uses its own response schema and the MCP tools return plain dicts.
+- 30 redundant `@pytest.mark.asyncio` markers, since `asyncio_mode = "auto"`
+  is configured.
 - `markdown-it-py` — declared as a dependency but never imported; the chunker
   is a hand-rolled header/block scanner.
 - The CORS middleware, which existed only for the Obsidian Electron origin.
