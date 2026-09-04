@@ -246,3 +246,23 @@ class TestTaskPrefixes:
         nomic = Embedder(model_name="nomic-ai/nomic-embed-text-v1.5").profile
         assert bge != nomic
         assert "bge-small" in bge
+
+
+class TestLegacyProfile:
+    """What an index carrying no recorded profile must contain."""
+
+    def test_legacy_profile_uses_the_old_unconditional_prefixes(self) -> None:
+        e = Embedder(model_name="BAAI/bge-small-en-v1.5")
+        assert e.legacy_profile == (
+            "BAAI/bge-small-en-v1.5|doc=search_document: |query=search_query: "
+        )
+
+    def test_differs_from_current_profile_for_bge(self) -> None:
+        """The whole point: a bge index built by the old code is incompatible."""
+        e = Embedder(model_name="BAAI/bge-small-en-v1.5")
+        assert e.legacy_profile != e.profile
+
+    def test_matches_current_profile_for_nomic(self) -> None:
+        """Nomic was always prefixed this way, so such an index is still valid."""
+        e = Embedder(model_name="nomic-ai/nomic-embed-text-v1.5")
+        assert e.legacy_profile == e.profile

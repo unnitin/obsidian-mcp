@@ -289,7 +289,11 @@ def main() -> None:
     embedder.load()
 
     store = VectorStore(settings.db_path)
-    store.initialize(dims=embedder.dims, profile=embedder.profile)
+    store.initialize(
+        dims=embedder.dims,
+        profile=embedder.profile,
+        legacy_profile=embedder.legacy_profile,
+    )
     logging.info("store and embedder ready, vault=%s", settings.vault_path)
 
     pipeline = IndexingPipeline(settings=settings, store=store, embedder=embedder)
