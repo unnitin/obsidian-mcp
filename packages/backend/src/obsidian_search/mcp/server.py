@@ -40,7 +40,7 @@ def _build_mcp_server(
     @mcp.tool()
     def search_notes(
         query: str,
-        top_k: int = 10,
+        top_k: int | None = None,
         source_types: list[str] | None = None,
         tags: list[str] | None = None,
     ) -> list[dict[str, Any]]:
@@ -52,7 +52,8 @@ def _build_mcp_server(
 
         Args:
             query: Natural-language search query.
-            top_k: Maximum number of results to return (default 10).
+            top_k: Maximum number of results to return. Omit to use the
+                server's configured default (OBSIDIAN_SEARCH_DEFAULT_TOP_K).
             source_types: Filter by source type: "markdown", "pdf", or "web".
             tags: Filter to chunks whose frontmatter tags contain any of these.
 
@@ -162,38 +163,7 @@ def _build_mcp_server(
         Returns:
             List of dicts with file_path, source_type, and chunk_count.
         """
-        conn = store._conn_()
-        if source_type:
-            rows = conn.execute(
-                """
-                SELECT file_path, source_type, COUNT(*) AS chunk_count,
-                       MAX(mtime) AS last_mtime
-                FROM chunks
-                WHERE source_type = ?
-                GROUP BY file_path, source_type
-                ORDER BY file_path
-                """,
-                (source_type,),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                """
-                SELECT file_path, source_type, COUNT(*) AS chunk_count,
-                       MAX(mtime) AS last_mtime
-                FROM chunks
-                GROUP BY file_path, source_type
-                ORDER BY file_path
-                """
-            ).fetchall()
-        return [
-            {
-                "file_path": row["file_path"],
-                "source_type": row["source_type"],
-                "chunk_count": row["chunk_count"],
-                "last_mtime": row["last_mtime"],
-            }
-            for row in rows
-        ]
+        return store.list_documents(source_type)
 
     # ── Write tools ────────────────────────────────────────────────────────
     # Additive only: neither tool can overwrite or delete existing writing.
@@ -283,7 +253,11 @@ def main() -> None:
     settings.db_dir.mkdir(parents=True, exist_ok=True)
 
     # Load the model first — dims are derived from it, needed to initialize the store.
-    embedder = Embedder(model_name=settings.embedding_model, device=settings.device)
+    embedder = Embedder(
+        model_name=settings.embedding_model,
+        device=settings.device,
+        batch_size=settings.embedding_batch_size,
+    )
     # Warm up the embedding model now so the first tool call isn't slow.
     # Claude Desktop can time out if the first response takes >10s.
     embedder.load()

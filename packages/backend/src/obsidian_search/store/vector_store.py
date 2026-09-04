@@ -252,6 +252,38 @@ class VectorStore:
         )
         return [row[0] for row in cur]
 
+    def list_documents(self, source_type: str | None = None) -> list[dict[str, Any]]:
+        """One row per indexed document, with chunk count and newest mtime.
+
+        Lives here rather than in the MCP layer, which used to hold the private
+        connection and write this SQL itself — the shortest path to the next
+        concurrency bug.
+        """
+        sql = """
+            SELECT file_path, source_type, COUNT(*) AS chunk_count,
+                   MAX(mtime) AS last_mtime
+            FROM chunks
+            {where}
+            GROUP BY file_path, source_type
+            ORDER BY file_path
+        """
+        params: tuple[str, ...] = ()
+        if source_type:
+            sql = sql.format(where="WHERE source_type = ?")
+            params = (source_type,)
+        else:
+            sql = sql.format(where="")
+
+        return [
+            {
+                "file_path": row["file_path"],
+                "source_type": row["source_type"],
+                "chunk_count": row["chunk_count"],
+                "last_mtime": row["last_mtime"],
+            }
+            for row in self._conn_().execute(sql, params)
+        ]
+
     def get_mtime(self, file_path: str) -> float | None:
         row = (
             self._conn_()

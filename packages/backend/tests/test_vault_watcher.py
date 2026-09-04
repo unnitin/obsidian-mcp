@@ -267,3 +267,44 @@ class TestWatcherOwnership:
             second.start()
         assert second.is_running
         second.stop()
+
+
+class TestWatcherPathConfinement:
+    """Event paths are caller-supplied in effect — a move can point anywhere."""
+
+    def test_event_outside_the_vault_is_ignored(self, tmp_path: Path) -> None:
+        """Regression: on_moved forwards dest_path, so a note moved out of the
+        vault was indexed at its new location outside it."""
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        outside = tmp_path / "elsewhere"
+        outside.mkdir()
+        w = _make_watcher(vault)
+
+        w._on_event(str(outside / "note.md"), deleted=False)
+        time.sleep(0.15)
+        w.pipeline.index_file.assert_not_called()  # type: ignore[attr-defined]
+
+    def test_traversal_out_of_the_vault_is_ignored(self, tmp_path: Path) -> None:
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        w = _make_watcher(vault)
+        w._on_event(str(vault / ".." / "escape.md"), deleted=False)
+        time.sleep(0.15)
+        w.pipeline.index_file.assert_not_called()  # type: ignore[attr-defined]
+
+    def test_event_inside_the_vault_is_still_dispatched(self, tmp_path: Path) -> None:
+        note = tmp_path / "note.md"
+        note.write_text("# Note")
+        w = _make_watcher(tmp_path)
+        w._on_event(str(note), deleted=False)
+        time.sleep(0.15)
+        w.pipeline.index_file.assert_called_once()  # type: ignore[attr-defined]
+
+    def test_delete_outside_the_vault_does_not_touch_the_index(self, tmp_path: Path) -> None:
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        w = _make_watcher(vault)
+        w._on_event(str(tmp_path / "gone.md"), deleted=True)
+        time.sleep(0.15)
+        w.pipeline.store.delete_by_file.assert_not_called()  # type: ignore[attr-defined]

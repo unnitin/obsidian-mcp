@@ -722,3 +722,56 @@ class TestLegacyIndexGuard:
         store = VectorStore(db)
         store.initialize(dims=DIMS, profile="m|doc=|query=anything: ")
         store.close()
+
+
+class TestListDocuments:
+    """Moved off the MCP layer, which held the private connection and its own SQL."""
+
+    def _add(self, store: VectorStore, path: str, source: SourceType, n: int) -> None:
+        for i in range(n):
+            store.upsert_chunks(
+                [
+                    Chunk(
+                        id=ChunkId.generate(path, i),
+                        source_type=source,
+                        file_path=path,
+                        content=f"chunk {i} of {path}",
+                        mtime=float(i),
+                        chunk_index=i,
+                    )
+                ],
+                _vec().reshape(1, DIMS),
+            )
+
+    def test_groups_by_document_with_counts(self, tmp_path: Path) -> None:
+        store = _store(tmp_path)
+        self._add(store, "/v/a.md", SourceType.MARKDOWN, 3)
+        self._add(store, "/v/b.md", SourceType.MARKDOWN, 1)
+        rows = store.list_documents()
+        assert [r["file_path"] for r in rows] == ["/v/a.md", "/v/b.md"]
+        assert [r["chunk_count"] for r in rows] == [3, 1]
+        store.close()
+
+    def test_reports_newest_mtime_per_document(self, tmp_path: Path) -> None:
+        store = _store(tmp_path)
+        self._add(store, "/v/a.md", SourceType.MARKDOWN, 3)
+        assert store.list_documents()[0]["last_mtime"] == 2.0
+        store.close()
+
+    def test_filters_by_source_type(self, tmp_path: Path) -> None:
+        store = _store(tmp_path)
+        self._add(store, "/v/a.md", SourceType.MARKDOWN, 1)
+        self._add(store, "https://x/p", SourceType.WEB, 1)
+        assert [r["file_path"] for r in store.list_documents("web")] == ["https://x/p"]
+        store.close()
+
+    def test_empty_store_returns_empty(self, tmp_path: Path) -> None:
+        store = _store(tmp_path)
+        assert store.list_documents() == []
+        store.close()
+
+    def test_unknown_source_type_returns_empty(self, tmp_path: Path) -> None:
+        store = _store(tmp_path)
+        self._add(store, "/v/a.md", SourceType.MARKDOWN, 1)
+        assert store.list_documents("nonsense") == []
+        store.close()

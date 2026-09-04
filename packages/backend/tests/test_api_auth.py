@@ -144,3 +144,47 @@ class TestLoopbackGuard:
         monkeypatch.delenv("OBSIDIAN_SEARCH_API_TOKEN", raising=False)
         with pytest.raises(SystemExit, match="without authentication"):
             server.main()
+
+
+class TestDefaultTopK:
+    """OBSIDIAN_SEARCH_DEFAULT_TOP_K was unreachable: both entry points always
+    sent an explicit top_k, so the Searcher's fallback never fired."""
+
+    def _seed(self, store: VectorStore, n: int) -> None:
+        from obsidian_search.models import Chunk, ChunkId, SourceType
+
+        for i in range(n):
+            store.upsert_chunks(
+                [
+                    Chunk(
+                        id=ChunkId.generate(f"/v/n{i}.md", 0),
+                        source_type=SourceType.MARKDOWN,
+                        file_path=f"/v/n{i}.md",
+                        content=f"content number {i}",
+                        mtime=1.0,
+                        chunk_index=0,
+                    )
+                ],
+                _fake_encode([f"content number {i}"]),
+            )
+
+    def test_omitted_top_k_uses_the_configured_default(self, tmp_path: Path) -> None:
+        client, store = _client(tmp_path, default_top_k=3)
+        self._seed(store, 10)
+        resp = client.post("/search", json={"query": "content"})
+        assert resp.status_code == 200
+        assert len(resp.json()["results"]) == 3
+        store.close()
+
+    def test_explicit_top_k_still_wins(self, tmp_path: Path) -> None:
+        client, store = _client(tmp_path, default_top_k=3)
+        self._seed(store, 10)
+        resp = client.post("/search", json={"query": "content", "top_k": 7})
+        assert len(resp.json()["results"]) == 7
+        store.close()
+
+    def test_out_of_range_top_k_still_rejected(self, tmp_path: Path) -> None:
+        client, store = _client(tmp_path)
+        assert client.post("/search", json={"query": "x", "top_k": 0}).status_code == 422
+        assert client.post("/search", json={"query": "x", "top_k": 101}).status_code == 422
+        store.close()

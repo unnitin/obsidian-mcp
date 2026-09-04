@@ -52,12 +52,21 @@ def prefixes_for(model_name: str) -> TaskPrefixes:
 
 
 class Embedder:
-    # Class-level default so tests that bypass __init__ still encode sanely.
+    # Class-level defaults so instances built without __init__ (tests that stub
+    # encode()) still have everything encode() reads.
     prefixes: TaskPrefixes = _NO_PREFIXES
+    device: str = "cpu"
+    batch_size: int = 32
 
-    def __init__(self, model_name: str = "BAAI/bge-small-en-v1.5", device: str = "cpu") -> None:
+    def __init__(
+        self,
+        model_name: str = "BAAI/bge-small-en-v1.5",
+        device: str = "cpu",
+        batch_size: int = 32,
+    ) -> None:
         self.model_name = model_name
         self.device = device
+        self.batch_size = batch_size
         self.dims: int = 0  # set from actual model after load()
         self.prefixes = prefixes_for(model_name)
         self._model: Any = None
@@ -107,7 +116,7 @@ class Embedder:
             result = model.encode(
                 texts,
                 normalize_embeddings=True,
-                batch_size=32,
+                batch_size=self.batch_size,
                 show_progress_bar=False,
             )
         self._flush_device_cache()

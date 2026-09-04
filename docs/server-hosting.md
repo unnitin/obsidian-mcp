@@ -290,22 +290,16 @@ prefix (e.g. `VAULT_PATH` works as well as `OBSIDIAN_SEARCH_VAULT_PATH`).
 | `ALLOW_PRIVATE_URLS` | `false` | Let `/ingest/url` fetch private/loopback/link-local addresses |
 | `EMBEDDING_MODEL` | `BAAI/bge-small-en-v1.5` | HuggingFace model ID (~130 MB, 384 dims) |
 | `DEVICE` | `cpu` | Torch device for the embedder and the reranker |
-| `EMBEDDING_BATCH_SIZE` | `32` | Chunks embedded and stored per transaction (×8) |
+| `EMBEDDING_BATCH_SIZE` | `32` | Texts per model batch; also sizes the indexing transaction (×8) |
 | `CHUNK_MAX_TOKENS` | `512` | Max tokens per chunk |
 | `CHUNK_MIN_TOKENS` | `64` | Min tokens (smaller chunks are merged) |
 | `CHUNK_OVERLAP_TOKENS` | `50` | Token overlap between chunks |
-| `DEFAULT_TOP_K` | `10` | Fallback search result count |
+| `DEFAULT_TOP_K` | `10` | Result count when a caller omits `top_k` |
 | `RERANK_CANDIDATES` | `50` | ANN candidates fetched before filtering/reranking |
 | `RERANKER_ENABLED` | `false` | Enable the cross-encoder reranker |
 | `RERANKER_MODEL` | `BAAI/bge-reranker-base` | Cross-encoder model ID |
 | `WATCHER_DEBOUNCE_SECONDS` | `2.0` | File change debounce delay |
 | `EXCLUDED_FOLDERS` | `[]` | JSON array of folder names to skip |
-
-Two caveats worth knowing, both open bugs rather than intended behaviour:
-`EMBEDDING_BATCH_SIZE` sizes the indexing transaction but does not reach the
-model's own batch size, which is fixed at 32; and `DEFAULT_TOP_K` is only a
-fallback that nothing currently triggers, because both the HTTP API and the MCP
-tools always send an explicit `top_k`.
 
 **Example `.env` file** (place in project root or `packages/backend/`):
 ```dotenv
@@ -325,6 +319,7 @@ EXCLUDED_FOLDERS=["Templates","Archive","Attachments"]
 
 | Scenario | Recommendation |
 |----------|---------------|
+| Large vault (> 10k notes) | Increase `EMBEDDING_BATCH_SIZE` to 64 |
 | Slow search responses | Decrease `RERANK_CANDIDATES` to 20 |
 | Very long notes | Decrease `CHUNK_MAX_TOKENS` to 256 |
 | Poor recall on short notes | Decrease `CHUNK_MIN_TOKENS` to 32 |
