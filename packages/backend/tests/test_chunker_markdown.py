@@ -319,7 +319,13 @@ class TestMergeSmall:
         chunks = chunker.chunk(content, FILE, MTIME)
         assert len(chunks) == 1  # no predecessor to merge into
 
-    def test_small_trailing_chunk_merged_into_predecessor(self) -> None:
+    def test_small_chunk_not_merged_across_a_section_boundary(self) -> None:
+        """A short section keeps its own heading rather than joining the previous one.
+
+        This previously merged, so "Tiny." was appended to the Section A chunk
+        and reported Section A's breadcrumb — attributing the text to the wrong
+        heading in every search result.
+        """
         content = """
 # Section A
 
@@ -332,11 +338,26 @@ Tiny.
 """
         chunker = MarkdownChunker(min_tokens=50, max_tokens=512)
         chunks = chunker.chunk(content, FILE, MTIME)
-        # "Tiny." is below min_tokens so it should be merged into the previous chunk
-        combined_content = " ".join(c.content for c in chunks)
-        assert "Tiny" in combined_content
-        # Should be merged: fewer chunks than sections
-        assert len(chunks) == 1
+
+        assert len(chunks) == 2
+        by_header = {c.header_path: c.content for c in chunks}
+        assert "Tiny" in by_header["Section B"]
+        assert "Tiny" not in by_header["Section A"]
+
+    def test_small_chunk_merged_within_the_same_section(self) -> None:
+        """Merging still happens where it is safe — inside one section."""
+        rows = "".join(f"| r{i} | v{i} |\n" for i in range(120))
+        content = f"""
+# Data
+
+| a | b |
+|---|---|
+{rows}
+"""
+        chunker = MarkdownChunker(min_tokens=200, max_tokens=64)
+        chunks = chunker.chunk(content, FILE, MTIME)
+        assert all(c.header_path == "Data" for c in chunks)
+        assert all(c.metadata.get("chunk_type") == "table" for c in chunks)
 
     def test_empty_chunk_list_returns_empty(self) -> None:
         from obsidian_search.ingestion.chunker_markdown import MarkdownChunker as MC
@@ -411,3 +432,155 @@ class TestSplitTableEdgeCases:
         result = c._split_table(table)
         assert len(result) >= 1
         assert all("A" in r or "x" in r for r in result)
+
+
+# ── Tag normalisation ─────────────────────────────────────────────────────────
+
+
+class TestTagNormalisation:
+    """Frontmatter tags arrive in whatever shape the note author wrote."""
+
+    def _tags(self, content: str) -> list[str]:
+        return MarkdownChunker(min_tokens=1).chunk(content, FILE, MTIME)[0].metadata["tags"]
+
+    def test_scalar_tag_becomes_a_list(self) -> None:
+        """Regression: `tags: work` stayed a string, so filters matched substrings."""
+        assert self._tags("---\ntags: work\n---\n\nBody text here.") == ["work"]
+
+    def test_scalar_tag_does_not_match_a_substring(self) -> None:
+        """Filtering for "or" must not match a note tagged "work"."""
+        tags = self._tags("---\ntags: work\n---\n\nBody text here.")
+        assert not any(t in tags for t in ["or"])
+
+    def test_comma_separated_string_splits(self) -> None:
+        assert self._tags("---\ntags: work, urgent\n---\n\nBody.") == ["work", "urgent"]
+
+    def test_list_is_preserved(self) -> None:
+        assert self._tags("---\ntags: [alpha, beta]\n---\n\nBody.") == ["alpha", "beta"]
+
+    def test_leading_hash_is_stripped(self) -> None:
+        assert self._tags("---\ntags: ['#alpha']\n---\n\nBody.") == ["alpha"]
+
+    def test_nested_tag_kept_whole(self) -> None:
+        assert self._tags("---\ntags: [project/alpha]\n---\n\nBody.") == ["project/alpha"]
+
+    def test_missing_tags_gives_empty_list(self) -> None:
+        assert self._tags("---\ntitle: Note\n---\n\nBody.") == []
+
+    def test_numeric_tag_becomes_a_string(self) -> None:
+        assert self._tags("---\ntags: 2024\n---\n\nBody.") == ["2024"]
+
+    def test_duplicates_removed(self) -> None:
+        assert self._tags("---\ntags: [a, a, b]\n---\n\nBody.") == ["a", "b"]
+
+
+class TestInlineTags:
+    """Inline #tags are the dominant Obsidian convention and were not indexed."""
+
+    def _tags(self, content: str) -> list[str]:
+        return MarkdownChunker(min_tokens=1).chunk(content, FILE, MTIME)[0].metadata["tags"]
+
+    def test_inline_tags_indexed(self) -> None:
+        tags = self._tags("Notes on #machine-learning and #physics today.")
+        assert tags == ["machine-learning", "physics"]
+
+    def test_nested_inline_tag(self) -> None:
+        assert self._tags("Filed under #project/alpha here.") == ["project/alpha"]
+
+    def test_merged_with_frontmatter_tags(self) -> None:
+        tags = self._tags("---\ntags: [work]\n---\n\nAbout #physics and #work.")
+        assert tags == ["work", "physics"]
+
+    def test_headings_are_not_tags(self) -> None:
+        assert self._tags("# Heading\n\n## Subheading\n\nBody #real here.") == ["real"]
+
+    def test_all_numeric_is_not_a_tag(self) -> None:
+        assert self._tags("Released in #2024 sometime.") == []
+
+    def test_url_fragment_is_not_a_tag(self) -> None:
+        assert self._tags("See https://example.com/page#section for detail.") == []
+
+    def test_fenced_code_yields_no_tags(self) -> None:
+        content = "Body text.\n\n```python\n# comment\n#neither\n```\n"
+        assert self._tags(content) == []
+
+    def test_inline_code_yields_no_tags(self) -> None:
+        assert self._tags("Use the `#nope` directive here.") == []
+
+
+# ── Block detection within a section ─────────────────────────────────────────
+
+
+class TestBlocksWithinSection:
+    """Special blocks used to register only when alone in their section."""
+
+    def _chunk(self, content: str, **kw: int) -> list:
+        return MarkdownChunker(min_tokens=1, **kw).chunk(content, FILE, MTIME)
+
+    def test_table_after_prose_is_still_a_table(self) -> None:
+        """Regression: one line of prose above a table shredded its rows."""
+        rows = "".join(f"| r{i} | v{i} |\n" for i in range(200))
+        chunks = self._chunk(f"# Data\n\nHere are the results.\n\n| a | b |\n|---|---|\n{rows}")
+        kinds = [c.metadata.get("chunk_type") for c in chunks]
+        assert None in kinds  # the prose
+        assert "table" in kinds  # and the table, detected
+
+    def test_table_after_prose_keeps_every_row(self) -> None:
+        rows = "".join(f"| r{i} | v{i} |\n" for i in range(200))
+        chunks = self._chunk(f"# Data\n\nIntro line.\n\n| a | b |\n|---|---|\n{rows}")
+        seen = {
+            line.strip()
+            for c in chunks
+            if c.metadata.get("chunk_type") == "table"
+            for line in c.content.splitlines()
+            if line.startswith("| r")
+        }
+        assert len(seen) == 200
+
+    def test_table_after_prose_repeats_the_header(self) -> None:
+        rows = "".join(f"| r{i} | v{i} |\n" for i in range(200))
+        chunks = self._chunk(f"# Data\n\nIntro.\n\n| a | b |\n|---|---|\n{rows}")
+        tables = [c for c in chunks if c.metadata.get("chunk_type") == "table"]
+        assert len(tables) > 1
+        assert all("| a | b |" in t.content for t in tables)
+
+    def test_prose_is_separated_from_the_table(self) -> None:
+        chunks = self._chunk("# Data\n\nIntro line.\n\n| a | b |\n|---|---|\n| 1 | 2 |\n")
+        prose = [c for c in chunks if c.metadata.get("chunk_type") is None]
+        assert len(prose) == 1
+        assert "Intro line." in prose[0].content
+        assert "| 1 | 2 |" not in prose[0].content
+
+    def test_mermaid_after_prose_is_detected(self) -> None:
+        content = "# Arch\n\nThe system looks like this.\n\n```mermaid\ngraph LR\n  A-->B\n```\n"
+        chunks = self._chunk(content)
+        kinds = [c.metadata.get("chunk_type") for c in chunks]
+        assert "mermaid" in kinds
+        diagram = next(c for c in chunks if c.metadata.get("chunk_type") == "mermaid")
+        assert "graph LR" in diagram.content and "A-->B" in diagram.content
+
+    def test_callout_after_prose_is_detected(self) -> None:
+        content = "# Notes\n\nSome prose first.\n\n> [!warning]\n> Be careful here.\n"
+        chunks = self._chunk(content)
+        callouts = [c for c in chunks if c.metadata.get("chunk_type") == "callout"]
+        assert len(callouts) == 1
+        assert callouts[0].metadata["callout_type"] == "warning"
+
+    def test_code_fence_is_not_mistaken_for_a_table(self) -> None:
+        content = "# Code\n\n```text\n| not | a | table |\n```\n\nTrailing prose.\n"
+        chunks = self._chunk(content)
+        assert all(c.metadata.get("chunk_type") != "table" for c in chunks)
+
+    def test_multiple_blocks_in_one_section(self) -> None:
+        content = (
+            "# Mixed\n\nIntro.\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n"
+            "More prose.\n\n> [!note]\n> A note.\n"
+        )
+        kinds = [c.metadata.get("chunk_type") for c in self._chunk(content)]
+        assert "table" in kinds
+        assert "callout" in kinds
+        assert None in kinds
+
+    def test_all_blocks_keep_the_section_breadcrumb(self) -> None:
+        content = "# Mixed\n\nIntro.\n\n| a | b |\n|---|---|\n| 1 | 2 |\n"
+        assert all(c.header_path == "Mixed" for c in self._chunk(content))
