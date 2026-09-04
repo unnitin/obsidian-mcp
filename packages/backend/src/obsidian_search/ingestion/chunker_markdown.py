@@ -399,12 +399,21 @@ class MarkdownChunker:
             can_merge = (
                 _tokens(c.content) < self.min_tokens
                 and bool(merged)
+                and _tokens(merged[-1].content) + _tokens(c.content) <= self.max_tokens
                 and merged[-1].header_path == c.header_path
-                and merged[-1].metadata.get("chunk_type") == c.metadata.get("chunk_type")
             )
-            if can_merge:
-                prev = merged[-1]
-                merged[-1] = prev.model_copy(update={"content": prev.content + "\n\n" + c.content})
-            else:
+            if not can_merge:
                 merged.append(c)
+                continue
+
+            prev = merged[-1]
+            update: dict[str, Any] = {"content": prev.content + "\n\n" + c.content}
+            # Blocks of different kinds may merge — a two-row table does not
+            # need a chunk of its own — but the result must not keep a label
+            # that now describes only part of it.
+            if prev.metadata.get("chunk_type") != c.metadata.get("chunk_type"):
+                mixed = {k: v for k, v in prev.metadata.items() if k != "chunk_type"}
+                mixed.pop("callout_type", None)
+                update["metadata"] = mixed
+            merged[-1] = prev.model_copy(update=update)
         return merged
