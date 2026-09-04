@@ -4,10 +4,10 @@ All notable changes to obsidian-mcp are documented here.
 
 ---
 
-## [Unreleased]
+## [0.5.0] — 2026-09-04
 
-Nine PRs (#24–#34) from a full review of the codebase. Two changes need action
-on upgrade — see **Migration** at the end of this section.
+Sixteen PRs (#24–#39) from a full review of the codebase. Two changes need
+action on upgrade — see **Migration** at the end of this section.
 
 ### Fixed — correctness
 
