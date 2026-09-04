@@ -1,7 +1,6 @@
 """Core data models for obsidian-search."""
 
 import hashlib
-from datetime import datetime
 from enum import StrEnum
 from typing import Any, Literal
 
@@ -54,26 +53,6 @@ class SearchResult(BaseModel):
     source_type: SourceType
     file_path: str
     header_path: str | None = None
-    url: str | None = None
-
-
-class IndexStatus(BaseModel):
-    """Current state of the search index."""
-
-    total_chunks: int
-    total_documents: int
-    last_indexed_at: datetime | None
-    index_size_bytes: int
-    is_watching: bool
-
-
-class IndexedFile(BaseModel):
-    """Metadata for a single indexed document."""
-
-    file_path: str
-    source_type: SourceType
-    chunk_count: int
-    last_indexed: datetime
     url: str | None = None
 
 

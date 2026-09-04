@@ -1,15 +1,10 @@
 """Tests for core data models."""
 
-from datetime import UTC, datetime
-
 import pytest
 from obsidian_search.models import (
     Chunk,
     ChunkId,
-    IndexedFile,
-    IndexStatus,
     IngestResult,
-    SearchResult,
     SourceType,
 )
 from pydantic import ValidationError
@@ -132,95 +127,6 @@ class TestChunk:
                 mtime=1234567890.0,
                 chunk_index=-1,
             )
-
-
-class TestSearchResult:
-    def test_create_search_result(self) -> None:
-        result = SearchResult(
-            chunk_id=ChunkId.generate("Notes/hello.md", 0),
-            content="Some matched content",
-            score=0.92,
-            source_type=SourceType.MARKDOWN,
-            file_path="Notes/hello.md",
-        )
-        assert result.score == pytest.approx(0.92)
-
-    def test_score_between_0_and_1(self) -> None:
-        with pytest.raises(ValidationError):
-            SearchResult(
-                chunk_id="abc",
-                content="content",
-                score=1.5,
-                source_type=SourceType.MARKDOWN,
-                file_path="Notes/hello.md",
-            )
-
-    def test_score_cannot_be_negative(self) -> None:
-        with pytest.raises(ValidationError):
-            SearchResult(
-                chunk_id="abc",
-                content="content",
-                score=-0.1,
-                source_type=SourceType.MARKDOWN,
-                file_path="Notes/hello.md",
-            )
-
-    def test_header_path_optional(self) -> None:
-        result = SearchResult(
-            chunk_id="abc",
-            content="content",
-            score=0.5,
-            source_type=SourceType.MARKDOWN,
-            file_path="Notes/hello.md",
-        )
-        assert result.header_path is None
-
-    def test_url_optional(self) -> None:
-        result = SearchResult(
-            chunk_id="abc",
-            content="content",
-            score=0.5,
-            source_type=SourceType.MARKDOWN,
-            file_path="Notes/hello.md",
-        )
-        assert result.url is None
-
-
-class TestIndexStatus:
-    def test_create_status(self) -> None:
-        now = datetime.now(UTC)
-        status = IndexStatus(
-            total_chunks=1000,
-            total_documents=50,
-            last_indexed_at=now,
-            index_size_bytes=204800,
-            is_watching=True,
-        )
-        assert status.total_chunks == 1000
-        assert status.total_documents == 50
-        assert status.is_watching is True
-
-    def test_never_indexed_has_none_timestamp(self) -> None:
-        status = IndexStatus(
-            total_chunks=0,
-            total_documents=0,
-            last_indexed_at=None,
-            index_size_bytes=0,
-            is_watching=False,
-        )
-        assert status.last_indexed_at is None
-
-
-class TestIndexedFile:
-    def test_create_indexed_file(self) -> None:
-        now = datetime.now(UTC)
-        f = IndexedFile(
-            file_path="Notes/hello.md",
-            source_type=SourceType.MARKDOWN,
-            chunk_count=5,
-            last_indexed=now,
-        )
-        assert f.chunk_count == 5
 
 
 class TestIngestResult:

@@ -640,3 +640,26 @@ class TestFragmentation:
         by_header = {c.header_path: c.content for c in chunks}
         assert "Short." in by_header["Conclusions"]
         assert "Short." not in by_header["Introduction"]
+
+
+class TestNltkDownloadFailure:
+    """Indexing must survive an unavailable sentence tokeniser."""
+
+    def test_failed_download_falls_back_to_regex(self) -> None:
+        """The retry used to be unguarded, so a failed download aborted the file."""
+        fake = mock.MagicMock()
+        fake.sent_tokenize.side_effect = LookupError("punkt_tab missing")
+        fake.download.side_effect = OSError("network unreachable")
+        text = "First sentence here. Second sentence follows. Third one too."
+        with mock.patch.dict(sys.modules, {"nltk": fake}):
+            out = _split_sentences(text, max_tokens=4, overlap_tokens=0)
+        assert len(out) > 1
+        assert "First sentence here." in " ".join(out)
+
+    def test_successful_download_is_used(self) -> None:
+        fake = mock.MagicMock()
+        fake.sent_tokenize.side_effect = [LookupError("missing"), ["A one.", "B two."]]
+        with mock.patch.dict(sys.modules, {"nltk": fake}):
+            out = _split_sentences("A one. B two.", max_tokens=100, overlap_tokens=0)
+        fake.download.assert_called_once()
+        assert out == ["A one. B two."]

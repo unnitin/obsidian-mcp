@@ -42,6 +42,14 @@ on upgrade — see **Migration** at the end of this section.
 - **The watcher trusted whatever path an event carried.** `on_moved` forwarded
   `dest_path` unchecked, so a note moved out of the vault was indexed at its
   new location outside it. Events are now confined to the vault. (#38)
+- **A failed NLTK tokeniser download aborted indexing.** The download runs on
+  first use, inside indexing, on watcher threads — and the retry was unguarded,
+  so an offline or proxied first run propagated a LookupError instead of
+  falling back to regex sentence splitting. (#39)
+- **The reranker silently dropped candidates** if the model returned a
+  different number of scores than pairs (`zip(strict=False)`). It now raises.
+  Its docstring also claimed ANN distance was a secondary sort key; ties
+  actually rely on sort stability, which the comment now says. (#39)
 
 
 - **Concurrent index writes were failing silently.** `VectorStore` shares one
@@ -134,6 +142,10 @@ on upgrade — see **Migration** at the end of this section.
 
 ### Removed
 
+- `IndexStatus` and `IndexedFile` models, referenced only by their own tests —
+  the API uses its own response schema and the MCP tools return plain dicts.
+- 30 redundant `@pytest.mark.asyncio` markers, since `asyncio_mode = "auto"`
+  is configured.
 - `markdown-it-py` — declared as a dependency but never imported; the chunker
   is a hand-rolled header/block scanner.
 - The CORS middleware, which existed only for the Obsidian Electron origin.
